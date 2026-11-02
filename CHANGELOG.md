@@ -4,6 +4,24 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0�
 
 ---
 
+## [4.1.2] — 2026-11-02
+
+**Entity merge no longer loses or misfiles anything, and a read-only check for what earlier merges left behind.** If your mind ever merged two entities, please read [`docs/merge-damage-check.md`](docs/merge-damage-check.md). It explains what a merge before this release can have left in your database, gives a read-only check (`npm run check:merge-damage`), a repair for the vector findings that destroys nothing (`npm run repair:merge-vectors`), and notes for the rest. Every repair is the owner's decision. Upgrading stops new damage; it does not repair old damage.
+
+### Fixed
+
+- **Merge carried the memories but not their vectors** (#15, #16, by @biilda). The moved memories kept vectors filed under the merged-away entity, so a later delete left the vector behind (search could surface a deleted memory) and a later edit created a second one; the merged-away entity's own vector stayed too. Both merge doors (`graph_shape` merge and `POST /api/entities/merge`) now share one engine, `mergeEntities`, that moves the vectors with the memories without recomputing them, and deleting a memory finds its vector by `(source_type, source_id)`. Found by a deployment auditing v4 deletes.
+- **Merging an entity into itself deleted it and every one of its memories.** The merge moved the memories onto the same entity and then deleted it, and the database cascade took the memories with it. Both doors now refuse it (`Cannot merge entity #N into itself`, HTTP 400).
+- **Merge now carries everything that points at the merged-away entity, atomically.** Before, only memories and relations moved, in separate statements: thread links to the source entity were deleted (ON DELETE CASCADE), its images were left attached to no entity (ON DELETE SET NULL), the moved memories kept `person_id`/`node_id` on the deleted entity (so the bonds view did not show them), and a source entity with a consolidation group made the merge fail half-way, after the memories had moved. The merge is now one PostgreSQL statement (the adapter has no transactions, a single statement is atomic): memories with their subject columns, their vectors, images, thread links, consolidation groups, relations and, between two people, `relational_state` all move, along with the images' vectors' entity name and the daemon's proposals that name the source entity by id, to the target and the source entity goes, or nothing changes. A memory that already had two vectors keeps one, the newest. `tests/merge-lossless.integration.test.ts` (`TEST_MERGE_DATABASE_URL=… npm run test:postgres:merge`) proves each case on a real PostgreSQL + pgvector, including a failing merge leaving every row as it was; each of its tests fails on 4.1.1.
+
+### Added
+
+- **`npm run check:merge-damage`** (`scripts/check-merge-damage.mjs`): one `READ ONLY` transaction of `SELECT`s that reports, by count and row id and never by content, the ten kinds of trace an earlier merge can leave (MD-1 to MD-10). Exit `0` nothing found, `1` findings, `2` could not run; `--json` for agents.
+- **`npm run repair:merge-vectors`** (`scripts/repair-merge-vectors.mjs`): clears the vector findings (MD-1 to MD-4) without destroying anything. A dry run unless given `--apply`. Every vector it removes (orphaned, duplicate, or of a deleted entity) is moved, in the same statement, into `embeddings_recovered` with its text, metadata, vector and reason; misfiled vectors are re-filed. That matters because an orphaned vector can be the only remaining copy of a memory the old self-merge deleted. One transaction; before committing it verifies that every removed vector was kept, that no memory changed, and that MD-1 to MD-4 are clear, and otherwise rolls back. `embeddings_recovered` is created by the tool, not by a schema migration, so in-flight v3.2 → v4 migrations (bound to the migration set) are not disturbed; Resonant Mind never reads it.
+- [`docs/merge-damage-check.md`](docs/merge-damage-check.md) says what each finding means, what cannot be detected, what an agent may and may not do on the owner's behalf, how to read, restore or put back what the repair kept, and gives queries for the non-vector findings that do nothing unless the owner turns their `ROLLBACK` into `COMMIT`. All of it was run against a database damaged by the 4.1.1 merge.
+
+---
+
 ## [4.1.1] — 2026-10-27
 
 **Fixes from the first real v3.2 migration.** Anna (@anna092024) took a real D1 mind through 4.1.0 and found that a stock `wrangler d1 export` was refused. Her fixes (#12) and the follow-ups they led to (#13) are below. v4 itself is unchanged.

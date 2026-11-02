@@ -95,9 +95,17 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
       return jsonResponse({ error: "merge_from_id and merge_into_id required" }, 400);
     }
 
-    // Shared engine (same as graph_shape merge): observations, their vectors,
-    // relations, source entity. Response shape unchanged.
-    const result = await mergeEntities(env, mergeFromId, mergeIntoId);
+    // Shared engine (same as graph_shape merge): one atomic statement.
+    // Response shape unchanged.
+    if (Number(mergeFromId) === Number(mergeIntoId)) {
+      return jsonResponse({ error: "Cannot merge an entity into itself" }, 400);
+    }
+    let result;
+    try {
+      result = await mergeEntities(env, mergeFromId, mergeIntoId);
+    } catch (e) {
+      return jsonResponse({ error: `Merge failed and was not applied: ${e instanceof Error ? e.message : String(e)}` }, 500);
+    }
     if (result.missing === "from") return jsonResponse({ error: "Source entity not found" }, 404);
     if (result.missing === "into") return jsonResponse({ error: "Target entity not found" }, 404);
 
