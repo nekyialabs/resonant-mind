@@ -130,8 +130,15 @@ export async function handleMindEntity(env: Env, params: Record<string, unknown>
         return "Must provide merge_from_id and merge_into_id";
       }
 
-      // Shared engine: observations, their vectors, relations, source entity.
-      const result = await mergeEntities(env, mergeFromId, mergeIntoId);
+      // Shared engine: one atomic statement carries observations, their
+      // vectors, images, thread links, consolidation groups and relations.
+      let result;
+      try {
+        result = await mergeEntities(env, mergeFromId, mergeIntoId);
+      } catch (e) {
+        return `Merge of #${mergeFromId} into #${mergeIntoId} failed and was not applied: ${e instanceof Error ? e.message : String(e)}`;
+      }
+      if (result.refused === "same-entity") return `Cannot merge entity #${mergeFromId} into itself`;
       if (result.missing === "from") return `Source entity #${mergeFromId} not found`;
       if (result.missing === "into") return `Target entity #${mergeIntoId} not found`;
 

@@ -292,28 +292,157 @@ export async function deleteEntity(env: Env, params: DeleteEntityParams): Promis
 export interface MergeEntitiesResult {
   found: boolean;
   missing?: "from" | "into";
+  /** Set when the merge was refused before anything was written. */
+  refused?: "same-entity";
   fromName?: string;
   intoName?: string;
   observationsMoved?: number;
+  vectorsMoved?: number;
+  duplicateVectorsRemoved?: number;
+  imagesMoved?: number;
+  threadLinksMoved?: number;
+  consolidationGroupsMoved?: number;
+  relationsMoved?: number;
 }
 
 /**
- * mergeEntities — THE one merge engine for entities. The MCP (`graph_shape`
- * merge) and HTTP (`POST /api/entities/merge`) paths each carried their own
- * copy, and both moved observations without touching `embeddings`:
- *   - the moved observations kept vector ids `obs-{FROM}-{id}`, so a later
- *     edit upserted a second vector at `obs-{INTO}-{id}` (two vectors, one
- *     memory) and the metadata still named the old entity;
- *   - `entity-{FROM}` outlived its entity.
- * Here the moved vectors are re-keyed to `obs-{INTO}-{id}` (metadata.entity
- * renamed with them) and `entity-{FROM}` is dropped. Ordering: vectors are
- * re-keyed first (the only moment FROM's rows are still identifiable), then
- * observations move, then relations; the source entity row goes LAST. A
- * re-key failure is logged, never fatal: the merge itself still lands, and
- * deleteObservation's (source_type, source_id) predicate still finds the
- * stale-keyed vectors.
+ * Before the move: a memory may already carry more than one vector (an older
+ * merge left `obs-{FROM}-{id}` behind and a later edit wrote a second one at
+ * the current key). Keep exactly one per memory: the one at the current key
+ * `obs-{entity_id}-{id}` (where edits write, so it holds the newest content),
+ * else the newest. Without this the re-key below would give two rows the same
+ * id and the whole merge would be refused. Only derived vectors are removed;
+ * no memory is touched. Idempotent, and safe if the merge then fails.
+ */
+const DEDUPE_MOVING_VECTORS_SQL = `
+DELETE FROM embeddings e
+ WHERE e.source_type = 'observation'
+   AND e.source_id IN (SELECT id FROM observations WHERE entity_id = ?)
+   AND e.id <> (
+     SELECT k.id FROM embeddings k
+      WHERE k.source_type = 'observation' AND k.source_id = e.source_id
+      ORDER BY (k.id = 'obs-' || ?::text || '-' || k.source_id) DESC,
+               k.created_at DESC NULLS LAST, k.id DESC
+      LIMIT 1)`;
+
+/**
+ * The merge itself: ONE statement. The adapter opens a connection per
+ * statement and has no transactions, but a single PostgreSQL statement is
+ * atomic, data-modifying CTEs included: either every row below moves and the
+ * source entity goes, or nothing changes. All CTEs read the same snapshot, so
+ * `moving` still names FROM's observations while `obs` moves them. Foreign-key
+ * actions run at the end of the statement, after the rows have moved, so the
+ * delete of the source entity cascades to nothing that was carried over.
+ *
+ * Everything that points at an entity is carried to INTO:
+ *   - observations: entity_id AND the person_id/node_id subject columns (the
+ *     routing trigger only fills those when both are NULL, so an entity_id-only
+ *     update left them on the deleted entity, hiding the memories from readers
+ *     that use person_id, such as bonds);
+ *   - their vectors: re-keyed to obs-{INTO}-{id}, metadata.entity renamed,
+ *     the vector values themselves unchanged; entity-{FROM} is removed;
+ *   - images (FK ON DELETE SET NULL: were left attached to nothing);
+ *   - thread links (FK ON DELETE CASCADE: were deleted); a link INTO already
+ *     has for the same thread and role is left to cascade, as INTO keeps it;
+ *   - consolidation groups (FK NO ACTION: the delete failed half-way, after the
+ *     observations had moved);
+ *   - relations, by name (no FK), each row updated once;
+ *   - relational_state.person, by name, when both entities are people (bonds
+ *     read a person's feelings by name).
+ * If INTO is in neither people nor nodes the observations' subject CHECK fails
+ * and the whole statement is refused, rather than guessing a subject.
+ */
+const MERGE_SQL = `
+WITH p AS (
+  SELECT ?::int AS from_id, ?::int AS into_id, ?::text AS from_name, ?::text AS into_name
+), k AS (
+  SELECT EXISTS (SELECT 1 FROM people WHERE id = p.into_id) AS into_person,
+         EXISTS (SELECT 1 FROM nodes  WHERE id = p.into_id) AS into_node,
+         EXISTS (SELECT 1 FROM people WHERE id = p.from_id) AS from_person
+    FROM p
+), moving AS (
+  SELECT o.id FROM observations o, p WHERE o.entity_id = p.from_id
+), vec AS (
+  UPDATE embeddings e
+     SET id = 'obs-' || p.into_id::text || '-' || e.source_id,
+         metadata = jsonb_set(COALESCE(e.metadata, '{}'::jsonb), '{entity}', to_jsonb(p.into_name))
+    FROM p
+   WHERE e.source_type = 'observation' AND e.source_id IN (SELECT id FROM moving)
+  RETURNING e.id
+), entity_vec AS (
+  DELETE FROM embeddings e USING p WHERE e.id = 'entity-' || p.from_id::text
+  RETURNING e.id
+), obs AS (
+  UPDATE observations o
+     SET entity_id = p.into_id,
+         person_id = CASE WHEN k.into_person THEN p.into_id END,
+         node_id   = CASE WHEN k.into_node AND NOT k.into_person THEN p.into_id END
+    FROM p, k
+   WHERE o.entity_id = p.from_id
+  RETURNING o.id
+), imgs AS (
+  UPDATE images i
+     SET entity_id = p.into_id,
+         person_id = CASE WHEN k.into_person THEN p.into_id END,
+         node_id   = CASE WHEN k.into_node AND NOT k.into_person THEN p.into_id END
+    FROM p, k
+   WHERE i.entity_id = p.from_id
+  RETURNING i.id
+), groups AS (
+  UPDATE consolidation_groups g
+     SET entity_id = p.into_id,
+         person_id = CASE WHEN k.into_person THEN p.into_id END,
+         node_id   = CASE WHEN k.into_node AND NOT k.into_person THEN p.into_id END
+    FROM p, k
+   WHERE g.entity_id = p.from_id
+  RETURNING g.id
+), threads AS (
+  UPDATE thread_entities t
+     SET entity_id = p.into_id
+    FROM p
+   WHERE t.entity_id = p.from_id
+     AND NOT EXISTS (
+       SELECT 1 FROM thread_entities t2
+        WHERE t2.thread_id = t.thread_id AND t2.role = t.role AND t2.entity_id = p.into_id)
+  RETURNING t.id
+), rels AS (
+  UPDATE relations r
+     SET from_entity = CASE WHEN r.from_entity = p.from_name THEN p.into_name ELSE r.from_entity END,
+         to_entity   = CASE WHEN r.to_entity   = p.from_name THEN p.into_name ELSE r.to_entity END
+    FROM p
+   WHERE r.from_entity = p.from_name OR r.to_entity = p.from_name
+  RETURNING r.id
+), feelings AS (
+  UPDATE relational_state s
+     SET person = p.into_name
+    FROM p, k
+   WHERE k.from_person AND k.into_person AND s.person = p.from_name
+  RETURNING s.id
+), gone AS (
+  DELETE FROM entities x USING p WHERE x.id = p.from_id
+  RETURNING x.id
+)
+SELECT (SELECT count(*) FROM obs)::int     AS observations_moved,
+       (SELECT count(*) FROM vec)::int     AS vectors_moved,
+       (SELECT count(*) FROM imgs)::int    AS images_moved,
+       (SELECT count(*) FROM threads)::int AS thread_links_moved,
+       (SELECT count(*) FROM groups)::int  AS consolidation_groups_moved,
+       (SELECT count(*) FROM rels)::int    AS relations_moved,
+       (SELECT count(*) FROM feelings)::int AS feelings_moved,
+       (SELECT count(*) FROM entity_vec)::int AS entity_vectors_removed,
+       (SELECT count(*) FROM gone)::int    AS entities_deleted`;
+
+/**
+ * mergeEntities — THE one merge engine for entities (MCP `graph_shape` merge
+ * and HTTP `POST /api/entities/merge`). Refuses a merge of an entity into
+ * itself (the old code then deleted the entity and, by cascade, every one of
+ * its memories). Otherwise: an idempotent vector de-duplication, then the
+ * merge as one atomic statement (see MERGE_SQL). If the merge statement
+ * fails, nothing of the merge was applied; the error is thrown to the door.
  */
 export async function mergeEntities(env: Env, fromId: number, intoId: number): Promise<MergeEntitiesResult> {
+  if (Number(fromId) === Number(intoId)) return { found: false, refused: "same-entity" };
+
   const fromEntity = await env.DB.prepare(`SELECT id, name FROM entities WHERE id = ?`).bind(fromId).first();
   const intoEntity = await env.DB.prepare(`SELECT id, name FROM entities WHERE id = ?`).bind(intoId).first();
   if (!fromEntity) return { found: false, missing: "from" };
@@ -322,31 +451,25 @@ export async function mergeEntities(env: Env, fromId: number, intoId: number): P
   const fromName = fromEntity.name as string;
   const intoName = intoEntity.name as string;
 
-  // Re-key BEFORE moving, while `entity_id = FROM` still identifies exactly the
-  // rows being moved (afterwards they're indistinguishable from INTO's own).
-  try {
-    await env.DB.prepare(
-      `UPDATE embeddings
-       SET id = 'obs-' || ?::text || '-' || source_id,
-           metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{entity}', to_jsonb(?::text))
-       WHERE source_type = 'observation'
-         AND source_id IN (SELECT id FROM observations WHERE entity_id = ?)`
-    ).bind(intoId, intoName, fromId).run();
-    await env.DB.prepare(`DELETE FROM embeddings WHERE id = ?`).bind(`entity-${fromId}`).run();
-  } catch (e) {
-    console.error(`mergeEntities: embedding re-key for '${fromName}' (#${fromId}) → '${intoName}' (#${intoId}) failed — vectors still keyed obs-${fromId}-*: ${e}`);
+  const deduped = await env.DB.prepare(DEDUPE_MOVING_VECTORS_SQL).bind(fromId, fromId).run();
+
+  const row = await env.DB.prepare(MERGE_SQL).bind(fromId, intoId, fromName, intoName).first();
+  if (!row || Number(row.entities_deleted) !== 1) {
+    // Unreachable unless the source entity vanished between the lookup and
+    // the merge (a concurrent delete); say so rather than report success.
+    throw new Error(`merge of #${fromId} into #${intoId} did not delete the source entity; it may have been removed concurrently`);
   }
 
-  const moved = await env.DB.prepare(
-    `UPDATE observations SET entity_id = ? WHERE entity_id = ?`
-  ).bind(intoId, fromId).run();
-
-  // Relations are keyed by name (no FK).
-  await env.DB.prepare(`UPDATE relations SET from_entity = ? WHERE from_entity = ?`).bind(intoName, fromName).run();
-  await env.DB.prepare(`UPDATE relations SET to_entity = ? WHERE to_entity = ?`).bind(intoName, fromName).run();
-
-  // Source entity — LAST
-  await env.DB.prepare(`DELETE FROM entities WHERE id = ?`).bind(fromId).run();
-
-  return { found: true, fromName, intoName, observationsMoved: moved.meta.changes ?? 0 };
+  return {
+    found: true,
+    fromName,
+    intoName,
+    observationsMoved: Number(row.observations_moved),
+    vectorsMoved: Number(row.vectors_moved),
+    duplicateVectorsRemoved: deduped.meta.changes ?? 0,
+    imagesMoved: Number(row.images_moved),
+    threadLinksMoved: Number(row.thread_links_moved),
+    consolidationGroupsMoved: Number(row.consolidation_groups_moved),
+    relationsMoved: Number(row.relations_moved),
+  };
 }
