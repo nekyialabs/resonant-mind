@@ -92,6 +92,26 @@ export const CHECKS = [
               OR NOT EXISTS (SELECT 1 FROM entities x WHERE x.name = r.to_entity)
            ORDER BY r.id`,
   },
+  {
+    code: 'MD-9',
+    title: 'Image vectors filed under an old entity name',
+    means: 'The image is attached to an entity, but its vector\'s metadata still names the entity it had before a merge, so search shows the old name. Only the name is wrong; the vector is fine.',
+    sql: `SELECT 'image ' || i.id AS ref FROM images i
+            JOIN entities x ON x.id = i.entity_id
+            JOIN embeddings e ON e.source_type = 'image' AND e.source_id = i.id
+           WHERE e.metadata->>'entity' IS DISTINCT FROM x.name
+           ORDER BY i.id`,
+  },
+  {
+    code: 'MD-10',
+    title: 'Pending daemon proposals naming an entity that does not exist',
+    means: 'The proposal points at a deleted or merged-away entity by id. It lists with an empty name and accepting it fails.',
+    sql: `SELECT 'proposal ' || d.id AS ref FROM daemon_proposals d
+           WHERE d.status = 'pending'
+             AND ((d.from_entity_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM entities x WHERE x.id = d.from_entity_id))
+               OR (d.to_entity_id   IS NOT NULL AND NOT EXISTS (SELECT 1 FROM entities x WHERE x.id = d.to_entity_id)))
+           ORDER BY d.id`,
+  },
 ];
 
 export const NOT_DETECTABLE = [

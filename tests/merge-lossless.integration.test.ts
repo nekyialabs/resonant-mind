@@ -28,6 +28,8 @@ import { deleteObservation, editObservation } from '../src/shared/surgery';
 import type { Env } from '../src/types';
 // @ts-expect-error -- plain .mjs script, no type declarations
 import { RECOVERED_TABLE_SQL, repairMergeVectors } from '../scripts/repair-merge-vectors.mjs';
+// @ts-expect-error -- plain .mjs script, no type declarations
+import { CHECKS } from '../scripts/check-merge-damage.mjs';
 
 const url = process.env.TEST_MERGE_DATABASE_URL;
 let db: pg.Client;
@@ -143,6 +145,45 @@ describe.runIf(Boolean(url))('entity merge on PostgreSQL loses nothing', () => {
     expect(await q(`SELECT id, content FROM embeddings WHERE source_type = 'observation' AND source_id = $1`, [id])).toEqual(
       [{ id: `obs-${z}-${id}`, content: 'delta one, edited' }]);
     expect(await invariants()).toEqual(clean);
+  });
+
+  it('renames merged images\' vectors and re-points daemon proposals', async () => {
+    const k = await entity('Omicron', 'concept');
+    const l = await entity('Pi', 'concept');
+    const m = await entity('Rho', 'concept');
+    const img = Number((await q(`INSERT INTO images (path, description, entity_id) VALUES ('o.png', 'omicron image', $1) RETURNING id`, [k]))[0].id);
+    await env.VECTORS.upsert([{ id: `img-${img}`, values: Array(768).fill(0.02), metadata: { source: 'image', entity: 'Omicron' } }]);
+    await q(`INSERT INTO daemon_proposals (proposal_type, from_entity_id, to_entity_id, reason)
+             VALUES ('resonance', $1, $2, 'omicron-rho'), ('resonance', $2, $1, 'rho-omicron')`, [k, m]);
+
+    await merge(k, l);
+
+    // Search shows an image's entity from its vector's metadata, as for observations.
+    expect(await q(`SELECT metadata->>'entity' AS m FROM embeddings WHERE id = $1`, [`img-${img}`])).toEqual([{ m: 'Pi' }]);
+    // Proposals name their entities by id; one left on the deleted entity lists as "null" and can't be accepted.
+    expect(await q(`SELECT from_entity_id, to_entity_id FROM daemon_proposals WHERE reason IN ('omicron-rho', 'rho-omicron') ORDER BY reason`)).toEqual(
+      [{ from_entity_id: l, to_entity_id: m }, { from_entity_id: m, to_entity_id: l }]);
+  });
+
+  it('check:merge-damage finds MD-9 and MD-10, and the guide\'s MD-9 repair clears it', async () => {
+    const upsilon = await entity('Upsilon', 'concept');
+    const img = Number((await q(`INSERT INTO images (path, description, entity_id) VALUES ('u.png', 'upsilon image', $1) RETURNING id`, [upsilon]))[0].id);
+    // As 4.1.1 left it once the owner re-attached the image: the vector still names the old entity.
+    await env.VECTORS.upsert([{ id: `img-${img}`, values: Array(768).fill(0.03), metadata: { source: 'image', entity: 'Gone Entity' } }]);
+    const proposal = Number((await q(`INSERT INTO daemon_proposals (proposal_type, from_entity_id, to_entity_id, reason)
+             VALUES ('resonance', 999999, $1, 'left on a deleted entity') RETURNING id`, [upsilon]))[0].id);
+    const run = async (code: string) => (await q(CHECKS.find((c: any) => c.code === code).sql)).map((r: any) => r.ref);
+
+    expect(await run('MD-9')).toEqual([`image ${img}`]);
+    expect(await run('MD-10')).toEqual([`proposal ${proposal}`]);
+
+    const doc = await readFile(join(process.cwd(), 'docs', 'merge-damage-check.md'), 'utf8');
+    const block = doc.slice(doc.indexOf('**MD-9')).match(/```sql\n([\s\S]*?)```/)![1];
+    expect(block.trimEnd().endsWith('ROLLBACK;')).toBe(true);
+    await q(block.replace(/ROLLBACK;\s*$/, 'COMMIT;'));
+    expect(await run('MD-9')).toEqual([]);
+    expect(await q(`SELECT metadata->>'entity' AS m FROM embeddings WHERE id = $1`, [`img-${img}`])).toEqual([{ m: 'Upsilon' }]);
+    await q(`DELETE FROM daemon_proposals WHERE id = $1`, [proposal]);
   });
 
   it('refuses a merge of an entity into itself and keeps its memories', async () => {

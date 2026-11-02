@@ -21,8 +21,10 @@ Until 4.1.2, merging entity A into entity B moved A's memories (`observations`) 
 | 7 | **Deleted A's thread links** (database cascade) | Threads no longer mention the merged entity | not detectable |
 | 8 | Stopped half-way if A had a consolidation group: memories moved, A not deleted, an error returned | Both entities exist; some memories point two ways | MD-6 |
 | 9 | **Merging an entity into itself deleted the entity and every one of its memories** | Memories gone | MD-1 (their vectors may remain) |
+| 10 | Left A's image vectors naming A | Once an unlinked image (row 6) is re-attached, image search still shows the old name | MD-9 |
+| 11 | Left the daemon's pending proposals pointing at A by id | A proposal lists with an empty name and can't be accepted | MD-10 |
 
-Nothing in 1 to 6 or 8 deleted a memory: the rows are still there, filed or linked wrongly. Rows 7 and 9 did delete data. For 9, the memory's vector (MD-1) may still hold its text in the `content` column, and may be the only copy left besides your backups. The repair below keeps it.
+Nothing in 1 to 6, 8, 10 or 11 deleted a memory: the rows are still there, filed or linked wrongly. Rows 7 and 9 did delete data. For 9, the memory's vector (MD-1) may still hold its text in the `content` column, and may be the only copy left besides your backups. The repair below keeps it.
 
 4.1.2 fixes the merge: it carries all of the above to B in one atomic statement (either everything moves or nothing changes), refuses to merge an entity into itself, and the release is tested against a real PostgreSQL + pgvector database. It does **not** repair what an earlier merge already left; that is what this page is for.
 
@@ -126,9 +128,23 @@ ROLLBACK;
 
 **MD-6 — a merge that stopped half-way.** No query here: the owner decides. For each finding, `person_id`/`node_id` is the entity the merge came *from* and `entity_id` the one it went *into*. If the owner still wants that merge, run it again on 4.1.2 (it now carries consolidation groups); if not, leave it.
 
-**MD-7 — unlinked images.** No query here. The database no longer knows which entity an image should belong to; `person_id`/`node_id` hold the id of the entity it used to belong to, which the owner can match against their own record of the merge. Re-attach by hand only where the owner says where.
+**MD-7 — unlinked images.** No query here. The database no longer knows which entity an image should belong to; `person_id`/`node_id` hold the id of the entity it used to belong to, and the image's vector (`img-{id}` in `embeddings`) usually still names it in `metadata->>'entity'`, which the owner can match against their own record of the merge. Re-attach by hand only where the owner says where. After re-attaching, run the check again: the image's vector will show under MD-9.
 
 **MD-8 — relations naming a missing entity.** No query here: the owner decides whether to rename, re-point or delete each one.
+
+**MD-9 — image vectors filed under an old name.** Renames each attached image's vector to its entity's current name. The vector values are not touched:
+
+```sql
+BEGIN;
+UPDATE embeddings e
+   SET metadata = jsonb_set(COALESCE(e.metadata, '{}'::jsonb), '{entity}', to_jsonb(x.name))
+  FROM images i JOIN entities x ON x.id = i.entity_id
+ WHERE e.source_type = 'image' AND e.source_id = i.id
+   AND e.metadata->>'entity' IS DISTINCT FROM x.name;
+ROLLBACK;
+```
+
+**MD-10 — pending proposals naming a missing entity.** No query here. The daemon proposed them before the merge; the owner decides whether to point each one at the entity the old one was merged into, or reject it.
 
 **Thread links (not detectable).** If they matter, compare `thread_entities` with the backup taken before the merge, or with an older backup.
 

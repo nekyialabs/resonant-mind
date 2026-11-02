@@ -300,6 +300,8 @@ export interface MergeEntitiesResult {
   vectorsMoved?: number;
   duplicateVectorsRemoved?: number;
   imagesMoved?: number;
+  imageVectorsRenamed?: number;
+  proposalsMoved?: number;
   threadLinksMoved?: number;
   consolidationGroupsMoved?: number;
   relationsMoved?: number;
@@ -341,7 +343,12 @@ DELETE FROM embeddings e
  *     that use person_id, such as bonds);
  *   - their vectors: re-keyed to obs-{INTO}-{id}, metadata.entity renamed,
  *     the vector values themselves unchanged; entity-{FROM} is removed;
- *   - images (FK ON DELETE SET NULL: were left attached to nothing);
+ *   - images (FK ON DELETE SET NULL: were left attached to nothing), and
+ *     their vectors' metadata.entity (img-{id} keys carry no entity id, so
+ *     only the name search shows needs renaming);
+ *   - daemon proposals' from_entity_id/to_entity_id (no FK: a pending
+ *     proposal left on the deleted entity listed as "null" and failed on
+ *     accept, since relations.from_entity is NOT NULL);
  *   - thread links (FK ON DELETE CASCADE: were deleted); a link INTO already
  *     has for the same thread and role is left to cascade, as INTO keeps it;
  *   - consolidation groups (FK NO ACTION: the delete failed half-way, after the
@@ -372,6 +379,20 @@ WITH p AS (
 ), entity_vec AS (
   DELETE FROM embeddings e USING p WHERE e.id = 'entity-' || p.from_id::text
   RETURNING e.id
+), img_vec AS (
+  UPDATE embeddings e
+     SET metadata = jsonb_set(COALESCE(e.metadata, '{}'::jsonb), '{entity}', to_jsonb(p.into_name))
+    FROM p
+   WHERE e.source_type = 'image'
+     AND e.source_id IN (SELECT i.id FROM images i WHERE i.entity_id = p.from_id)
+  RETURNING e.id
+), proposals AS (
+  UPDATE daemon_proposals d
+     SET from_entity_id = CASE WHEN d.from_entity_id = p.from_id THEN p.into_id ELSE d.from_entity_id END,
+         to_entity_id   = CASE WHEN d.to_entity_id   = p.from_id THEN p.into_id ELSE d.to_entity_id END
+    FROM p
+   WHERE d.from_entity_id = p.from_id OR d.to_entity_id = p.from_id
+  RETURNING d.id
 ), obs AS (
   UPDATE observations o
      SET entity_id = p.into_id,
@@ -430,6 +451,8 @@ SELECT (SELECT count(*) FROM obs)::int     AS observations_moved,
        (SELECT count(*) FROM rels)::int    AS relations_moved,
        (SELECT count(*) FROM feelings)::int AS feelings_moved,
        (SELECT count(*) FROM entity_vec)::int AS entity_vectors_removed,
+       (SELECT count(*) FROM img_vec)::int AS image_vectors_renamed,
+       (SELECT count(*) FROM proposals)::int AS proposals_moved,
        (SELECT count(*) FROM gone)::int    AS entities_deleted`;
 
 /**
@@ -468,6 +491,8 @@ export async function mergeEntities(env: Env, fromId: number, intoId: number): P
     vectorsMoved: Number(row.vectors_moved),
     duplicateVectorsRemoved: deduped.meta.changes ?? 0,
     imagesMoved: Number(row.images_moved),
+    imageVectorsRenamed: Number(row.image_vectors_renamed),
+    proposalsMoved: Number(row.proposals_moved),
     threadLinksMoved: Number(row.thread_links_moved),
     consolidationGroupsMoved: Number(row.consolidation_groups_moved),
     relationsMoved: Number(row.relations_moved),
