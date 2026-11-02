@@ -197,8 +197,14 @@ export async function deleteObservation(env: Env, observationId: number): Promis
   } catch { /* table may not exist on an unmigrated tenant */ }
 
   // embeddings — the one table that is NOT FK-linked; this delete is load-bearing.
+  // Keyed by (source_type, source_id), not by rebuilding `obs-{entity_id}-{id}`:
+  // the string id bakes in the entity the observation was written under, so a
+  // rebuilt key misses (and orphans) the vector of any observation that later
+  // moved entity — the same predicate deleteEntity already uses.
   try {
-    await env.DB.prepare(`DELETE FROM embeddings WHERE id = ?`).bind(`obs-${obs.entity_id}-${observationId}`).run();
+    await env.DB.prepare(
+      `DELETE FROM embeddings WHERE source_type = 'observation' AND source_id = ?`
+    ).bind(observationId).run();
   } catch { /* embedding may not exist */ }
 
   // The observation row itself, LAST.
@@ -277,4 +283,70 @@ export async function deleteEntity(env: Env, params: DeleteEntityParams): Promis
     entityName,
     observationCount: Number(obsCount?.c || 0),
   };
+}
+
+// ---------------------------------------------------------------------------
+// mergeEntities
+// ---------------------------------------------------------------------------
+
+export interface MergeEntitiesResult {
+  found: boolean;
+  missing?: "from" | "into";
+  fromName?: string;
+  intoName?: string;
+  observationsMoved?: number;
+}
+
+/**
+ * mergeEntities — THE one merge engine for entities. The MCP (`graph_shape`
+ * merge) and HTTP (`POST /api/entities/merge`) paths each carried their own
+ * copy, and both moved observations without touching `embeddings`:
+ *   - the moved observations kept vector ids `obs-{FROM}-{id}`, so a later
+ *     edit upserted a second vector at `obs-{INTO}-{id}` (two vectors, one
+ *     memory) and the metadata still named the old entity;
+ *   - `entity-{FROM}` outlived its entity.
+ * Here the moved vectors are re-keyed to `obs-{INTO}-{id}` (metadata.entity
+ * renamed with them) and `entity-{FROM}` is dropped. Ordering: vectors are
+ * re-keyed first (the only moment FROM's rows are still identifiable), then
+ * observations move, then relations; the source entity row goes LAST. A
+ * re-key failure is logged, never fatal: the merge itself still lands, and
+ * deleteObservation's (source_type, source_id) predicate still finds the
+ * stale-keyed vectors.
+ */
+export async function mergeEntities(env: Env, fromId: number, intoId: number): Promise<MergeEntitiesResult> {
+  const fromEntity = await env.DB.prepare(`SELECT id, name FROM entities WHERE id = ?`).bind(fromId).first();
+  const intoEntity = await env.DB.prepare(`SELECT id, name FROM entities WHERE id = ?`).bind(intoId).first();
+  if (!fromEntity) return { found: false, missing: "from" };
+  if (!intoEntity) return { found: false, missing: "into" };
+
+  const fromName = fromEntity.name as string;
+  const intoName = intoEntity.name as string;
+
+  // Re-key BEFORE moving, while `entity_id = FROM` still identifies exactly the
+  // rows being moved (afterwards they're indistinguishable from INTO's own).
+  try {
+    await env.DB.prepare(
+      `UPDATE embeddings
+       SET id = 'obs-' || ?::text || '-' || source_id,
+           metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{entity}', to_jsonb(?::text))
+       WHERE source_type = 'observation'
+         AND source_id IN (SELECT id FROM observations WHERE entity_id = ?)`
+    ).bind(intoId, intoName, fromId).run();
+    await env.DB.prepare(`DELETE FROM embeddings WHERE id = ?`).bind(`entity-${fromId}`).run();
+  } catch (e) {
+    console.error(`mergeEntities: embedding re-key for '${fromName}' (#${fromId}) → '${intoName}' (#${intoId}) failed — vectors still keyed obs-${fromId}-*: ${e}`);
+  }
+
+  const moved = await env.DB.prepare(
+    `UPDATE observations SET entity_id = ? WHERE entity_id = ?`
+  ).bind(intoId, fromId).run();
+
+  // Relations are keyed by name (no FK).
+  await env.DB.prepare(`UPDATE relations SET from_entity = ? WHERE from_entity = ?`).bind(intoName, fromName).run();
+  await env.DB.prepare(`UPDATE relations SET to_entity = ? WHERE to_entity = ?`).bind(intoName, fromName).run();
+
+  // Source entity — LAST
+  await env.DB.prepare(`DELETE FROM entities WHERE id = ?`).bind(fromId).run();
+
+  return { found: true, fromName, intoName, observationsMoved: moved.meta.changes ?? 0 };
 }

@@ -11,6 +11,7 @@
 
 import type { Env } from "../types";
 import { getEmbedding } from "../shared/mind-helpers";
+import { mergeEntities } from "../shared/surgery";
 
 export async function handleMindEntity(env: Env, params: Record<string, unknown>): Promise<string> {
   const action = params.action as string;
@@ -129,33 +130,12 @@ export async function handleMindEntity(env: Env, params: Record<string, unknown>
         return "Must provide merge_from_id and merge_into_id";
       }
 
-      const fromEntity = await env.DB.prepare(
-        `SELECT id, name, entity_type, primary_context FROM entities WHERE id = ?`
-      ).bind(mergeFromId).first() as any;
-      const intoEntity = await env.DB.prepare(
-        `SELECT id, name, entity_type, primary_context FROM entities WHERE id = ?`
-      ).bind(mergeIntoId).first() as any;
+      // Shared engine: observations, their vectors, relations, source entity.
+      const result = await mergeEntities(env, mergeFromId, mergeIntoId);
+      if (result.missing === "from") return `Source entity #${mergeFromId} not found`;
+      if (result.missing === "into") return `Target entity #${mergeIntoId} not found`;
 
-      if (!fromEntity) return `Source entity #${mergeFromId} not found`;
-      if (!intoEntity) return `Target entity #${mergeIntoId} not found`;
-
-      // Move observations from source to target
-      const obsResult = await env.DB.prepare(
-        `UPDATE observations SET entity_id = ? WHERE entity_id = ?`
-      ).bind(mergeIntoId, mergeFromId).run();
-
-      // Update relations that reference the old entity name
-      await env.DB.prepare(
-        `UPDATE relations SET from_entity = ? WHERE from_entity = ?`
-      ).bind(intoEntity.name, fromEntity.name).run();
-      await env.DB.prepare(
-        `UPDATE relations SET to_entity = ? WHERE to_entity = ?`
-      ).bind(intoEntity.name, fromEntity.name).run();
-
-      // Delete the source entity
-      await env.DB.prepare(`DELETE FROM entities WHERE id = ?`).bind(mergeFromId).run();
-
-      return `Merged '${fromEntity.name}' (#${mergeFromId}) into '${intoEntity.name}' (#${mergeIntoId})\nMoved ${obsResult.meta.changes} observations`;
+      return `Merged '${result.fromName}' (#${mergeFromId}) into '${result.intoName}' (#${mergeIntoId})\nMoved ${result.observationsMoved} observations`;
     }
 
     case "archive_old": {

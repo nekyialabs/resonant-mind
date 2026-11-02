@@ -1,6 +1,6 @@
 // HTTP handler for /api/entities — extracted from src/index.ts.
 import { jsonResponse } from "../response";
-import { deleteEntity } from "../../shared/surgery";
+import { deleteEntity, mergeEntities } from "../../shared/surgery";
 import type { Env } from "../../types";
 
 export async function handleApiEntities(request: Request, env: Env, pathParts: string[]): Promise<Response> {
@@ -95,29 +95,17 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
       return jsonResponse({ error: "merge_from_id and merge_into_id required" }, 400);
     }
 
-    const fromEntity = await env.DB.prepare("SELECT id, name, entity_type, primary_context, salience, created_at, updated_at FROM entities WHERE id = ?").bind(mergeFromId).first();
-    const intoEntity = await env.DB.prepare("SELECT id, name, entity_type, primary_context, salience, created_at, updated_at FROM entities WHERE id = ?").bind(mergeIntoId).first();
-
-    if (!fromEntity) return jsonResponse({ error: "Source entity not found" }, 404);
-    if (!intoEntity) return jsonResponse({ error: "Target entity not found" }, 404);
-
-    // Move observations
-    const obsResult = await env.DB.prepare(
-      "UPDATE observations SET entity_id = ? WHERE entity_id = ?"
-    ).bind(mergeIntoId, mergeFromId).run();
-
-    // Update relations
-    await env.DB.prepare("UPDATE relations SET from_entity = ? WHERE from_entity = ?").bind(intoEntity.name, fromEntity.name).run();
-    await env.DB.prepare("UPDATE relations SET to_entity = ? WHERE to_entity = ?").bind(intoEntity.name, fromEntity.name).run();
-
-    // Delete source entity
-    await env.DB.prepare("DELETE FROM entities WHERE id = ?").bind(mergeFromId).run();
+    // Shared engine (same as graph_shape merge): observations, their vectors,
+    // relations, source entity. Response shape unchanged.
+    const result = await mergeEntities(env, mergeFromId, mergeIntoId);
+    if (result.missing === "from") return jsonResponse({ error: "Source entity not found" }, 404);
+    if (result.missing === "into") return jsonResponse({ error: "Target entity not found" }, 404);
 
     return jsonResponse({
       success: true,
-      merged_from: fromEntity.name,
-      merged_into: intoEntity.name,
-      observations_moved: obsResult.meta.changes
+      merged_from: result.fromName,
+      merged_into: result.intoName,
+      observations_moved: result.observationsMoved
     });
   }
 
