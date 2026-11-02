@@ -20,7 +20,7 @@ export const CHECKS = [
   {
     code: 'MD-1',
     title: 'Observation vectors whose memory no longer exists',
-    means: 'Vector search can surface a memory that was deleted. CAUTION: if a merge of an entity into itself deleted memories, these vectors (their `content` column) may be the only remaining copy of them. Do not delete these before the owner has reviewed them.',
+    means: 'Vector search can surface a memory that was deleted. CAUTION: if a merge of an entity into itself deleted memories, these vectors (their `content` column) may be the only remaining copy of them. `npm run repair:merge-vectors` moves them to embeddings_recovered instead of deleting them; do not delete them any other way.',
     sql: `SELECT e.id AS ref FROM embeddings e
            WHERE e.source_type = 'observation'
              AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = e.source_id)
@@ -136,7 +136,7 @@ function printHuman(results) {
   for (const line of NOT_DETECTABLE) console.log(`  - ${line}`);
   const found = results.some((r) => r.count > 0);
   console.log(found
-    ? '\nFindings above. Do not change anything yet: take a backup, show this report to the owner, and read docs/merge-damage-check.md. Every repair is the owner\'s decision.'
+    ? '\nFindings above. Do not change anything yet: take a backup, show this report to the owner, and read docs/merge-damage-check.md. Every repair is the owner\'s decision. MD-1 to MD-4 are cleared without destroying anything by `npm run repair:merge-vectors` (a dry run unless given --apply).'
     : '\nNothing found by these checks.');
 }
 

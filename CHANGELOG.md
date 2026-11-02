@@ -6,7 +6,7 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0â
 
 ## [4.1.2] â€” 2026-11-02
 
-**Entity merge no longer loses or misfiles anything, and a read-only check for what earlier merges left behind.** If your mind ever merged two entities, please read [`docs/merge-damage-check.md`](docs/merge-damage-check.md). It explains what a merge before this release can have left in your database, gives a read-only check (`npm run check:merge-damage`), and repair notes that are each the owner's decision. Upgrading stops new damage; it does not repair old damage.
+**Entity merge no longer loses or misfiles anything, and a read-only check for what earlier merges left behind.** If your mind ever merged two entities, please read [`docs/merge-damage-check.md`](docs/merge-damage-check.md). It explains what a merge before this release can have left in your database, gives a read-only check (`npm run check:merge-damage`), a repair for the vector findings that destroys nothing (`npm run repair:merge-vectors`), and notes for the rest. Every repair is the owner's decision. Upgrading stops new damage; it does not repair old damage.
 
 ### Fixed
 
@@ -16,7 +16,9 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0â
 
 ### Added
 
-- **`npm run check:merge-damage`** (`scripts/check-merge-damage.mjs`): one `READ ONLY` transaction of `SELECT`s that reports, by count and row id and never by content, the eight kinds of trace an earlier merge can leave (MD-1 to MD-8). Exit `0` nothing found, `1` findings, `2` could not run; `--json` for agents. [`docs/merge-damage-check.md`](docs/merge-damage-check.md) says what each finding means, what cannot be detected, what an agent may and may not do on the owner's behalf, and gives repair queries that do nothing unless the owner turns their `ROLLBACK` into `COMMIT`. The repairs were run against a database damaged by the 4.1.1 merge and leave the check clean except for the findings left to the owner by design.
+- **`npm run check:merge-damage`** (`scripts/check-merge-damage.mjs`): one `READ ONLY` transaction of `SELECT`s that reports, by count and row id and never by content, the eight kinds of trace an earlier merge can leave (MD-1 to MD-8). Exit `0` nothing found, `1` findings, `2` could not run; `--json` for agents.
+- **`npm run repair:merge-vectors`** (`scripts/repair-merge-vectors.mjs`): clears the vector findings (MD-1 to MD-4) without destroying anything. A dry run unless given `--apply`. Every vector it removes (orphaned, duplicate, or of a deleted entity) is moved, in the same statement, into `embeddings_recovered` with its text, metadata, vector and reason; misfiled vectors are re-filed. That matters because an orphaned vector can be the only remaining copy of a memory the old self-merge deleted. One transaction; before committing it verifies that every removed vector was kept, that no memory changed, and that MD-1 to MD-4 are clear, and otherwise rolls back. `embeddings_recovered` is created by the tool, not by a schema migration, so in-flight v3.2 â†’ v4 migrations (bound to the migration set) are not disturbed; Resonant Mind never reads it.
+- [`docs/merge-damage-check.md`](docs/merge-damage-check.md) says what each finding means, what cannot be detected, what an agent may and may not do on the owner's behalf, how to read, restore or put back what the repair kept, and gives queries for the non-vector findings that do nothing unless the owner turns their `ROLLBACK` into `COMMIT`. All of it was run against a database damaged by the 4.1.1 merge.
 
 ---
 

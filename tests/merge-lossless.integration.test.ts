@@ -26,6 +26,8 @@ import { handleMindWrite } from '../src/legacy-tools/write';
 import { handleMindEntity } from '../src/legacy-tools/entity';
 import { deleteObservation, editObservation } from '../src/shared/surgery';
 import type { Env } from '../src/types';
+// @ts-expect-error -- plain .mjs script, no type declarations
+import { RECOVERED_TABLE_SQL, repairMergeVectors } from '../scripts/repair-merge-vectors.mjs';
 
 const url = process.env.TEST_MERGE_DATABASE_URL;
 let db: pg.Client;
@@ -165,5 +167,82 @@ describe.runIf(Boolean(url))('entity merge on PostgreSQL loses nothing', () => {
 
     expect(await merge(t, i)).toMatch(/failed and was not applied/);
     expect(await snapshot()).toEqual(before);
+  });
+
+  it('repair:merge-vectors clears what the old merge left and destroys nothing', async () => {
+    // Damage as 4.1.1 left it: a merge that moved observations only, a delete
+    // after it (orphan), an edit after it (duplicate), and a self-merge
+    // (every memory gone, vectors left).
+    const k = await entity('Kappa', 'concept');
+    const l = await entity('Lambda', 'concept');
+    const m = await entity('Mu', 'concept');
+    await write('Kappa', ['kappa kept', 'kappa deleted', 'kappa edited']);
+    await write('Mu', ['mu lost one', 'mu lost two']);
+    await env.VECTORS.upsert([{ id: `entity-${k}`, values: Array(768).fill(0.02), metadata: { source: 'entity', entity: 'Kappa' } }]);
+    await q(`UPDATE observations SET entity_id = $1, node_id = $1 WHERE entity_id = $2`, [l, k]);
+    await q(`DELETE FROM entities WHERE id = $1`, [k]);
+    await q(`DELETE FROM observations WHERE content = 'kappa deleted'`);
+    await editObservation(env, await obsId('kappa edited'), { content: 'kappa edited, twice' });
+    await q(`DELETE FROM entities WHERE id = $1`, [m]); // the old self-merge: cascade took Mu's memories
+
+    const vectorsOf = (pattern: string) => q(`SELECT id, content FROM embeddings WHERE content LIKE $1 ORDER BY id`, [pattern]);
+    const memories = () => q(`SELECT id, entity_id, content FROM observations ORDER BY id`);
+    const allVectors = () => q(`SELECT id, content, md5(embedding::text) AS v FROM embeddings ORDER BY id`);
+    const memoriesBefore = await memories();
+    const vectorsBefore = await allVectors();
+    expect(await vectorsOf('kappa%')).toHaveLength(4); // 3 written + the edit's second vector
+
+    const pgClient = new pg.Client({ connectionString: url });
+    await pgClient.connect();
+    try {
+      const dry = await repairMergeVectors(pgClient);
+      expect(dry).toMatchObject({ apply: false, committed: false, refused: null });
+      expect(await allVectors()).toEqual(vectorsBefore);
+      expect((await q(`SELECT to_regclass('embeddings_recovered') AS t`))[0].t).toBeNull();
+
+      const applied = await repairMergeVectors(pgClient, { apply: true });
+      expect(applied).toMatchObject({ committed: true, refused: null, verified: { memories_unchanged: true, remaining: { 'MD-1': 0, 'MD-2': 0, 'MD-3': 0, 'MD-4': 0 } } });
+      expect(await memories()).toEqual(memoriesBefore);
+      // Every vector that left embeddings is in embeddings_recovered, byte for byte.
+      const after = await allVectors();
+      const recovered = await q(`SELECT id, content, md5(embedding::text) AS v, reason FROM embeddings_recovered ORDER BY recovered_id`);
+      const keptValues = new Set([...after, ...recovered].map((r: any) => `${r.content}|${r.v}`));
+      for (const v of vectorsBefore) expect(keptValues.has(`${v.content}|${v.v}`)).toBe(true);
+      // The self-merge's lost memories survive as text.
+      expect(recovered.filter((r: any) => r.reason === 'MD-1')).toHaveLength(3);
+      expect(recovered.some((r: any) => /mu lost one/.test(r.content))).toBe(true);
+      expect(recovered.some((r: any) => /mu lost two/.test(r.content))).toBe(true);
+      expect(recovered.some((r: any) => /kappa deleted/.test(r.content))).toBe(true);
+      expect(await invariants()).toEqual(clean);
+
+      const again = await repairMergeVectors(pgClient, { apply: true });
+      expect(again.steps.map((x: any) => x.rows)).toEqual([0, 0, 0, 0]);
+    } finally {
+      await pgClient.end();
+    }
+  });
+
+  it('repair:merge-vectors rolls back and changes nothing when its verification fails', async () => {
+    await entity('Nu', 'concept');
+    await write('Nu', ['nu one']);
+    const id = await obsId('nu one');
+    // A duplicate vector (MD-2), so the repair has something to move.
+    await q(`INSERT INTO embeddings (id, source_type, source_id, embedding, content) SELECT 'obs-999-' || $1::text, 'observation', $1::int, embedding, content FROM embeddings WHERE source_id = $1::int AND source_type = 'observation'`, [id]);
+    await q(RECOVERED_TABLE_SQL);
+    // A trigger that changes a memory mid-repair stands in for any surprise.
+    await q(`CREATE FUNCTION touch_obs() RETURNS trigger AS $$ BEGIN UPDATE observations SET content = content || '!' WHERE id = (SELECT min(id) FROM observations); RETURN NULL; END $$ LANGUAGE plpgsql`);
+    await q(`CREATE TRIGGER touch_obs AFTER INSERT ON embeddings_recovered FOR EACH STATEMENT EXECUTE FUNCTION touch_obs()`);
+    const before = await Promise.all([q(`SELECT id, content FROM embeddings ORDER BY id`), q(`SELECT id, content FROM observations ORDER BY id`), q(`SELECT count(*)::int AS n FROM embeddings_recovered`)]);
+    const pgClient = new pg.Client({ connectionString: url });
+    await pgClient.connect();
+    try {
+      const report = await repairMergeVectors(pgClient, { apply: true });
+      expect(report.committed).toBe(false);
+      expect(report.refused).toEqual(['memories changed']);
+    } finally {
+      await pgClient.end();
+      await q(`DROP TRIGGER touch_obs ON embeddings_recovered; DROP FUNCTION touch_obs()`);
+    }
+    expect(await Promise.all([q(`SELECT id, content FROM embeddings ORDER BY id`), q(`SELECT id, content FROM observations ORDER BY id`), q(`SELECT count(*)::int AS n FROM embeddings_recovered`)])).toEqual(before);
   });
 });

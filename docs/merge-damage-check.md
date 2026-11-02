@@ -22,7 +22,7 @@ Until 4.1.2, merging entity A into entity B moved A's memories (`observations`) 
 | 8 | Stopped half-way if A had a consolidation group: memories moved, A not deleted, an error returned | Both entities exist; some memories point two ways | MD-6 |
 | 9 | **Merging an entity into itself deleted the entity and every one of its memories** | Memories gone | MD-1 (their vectors may remain) |
 
-Nothing in 1 to 6 or 8 deleted a memory: the rows are still there, filed or linked wrongly. Rows 7 and 9 did delete data. For 9, the memory's vector (MD-1) may still hold its text in the `content` column, and may be the only copy left besides your backups.
+Nothing in 1 to 6 or 8 deleted a memory: the rows are still there, filed or linked wrongly. Rows 7 and 9 did delete data. For 9, the memory's vector (MD-1) may still hold its text in the `content` column, and may be the only copy left besides your backups. The repair below keeps it.
 
 4.1.2 fixes the merge: it carries all of the above to B in one atomic statement (either everything moves or nothing changes), refuses to merge an entity into itself, and the release is tested against a real PostgreSQL + pgvector database. It does **not** repair what an earlier merge already left; that is what this page is for.
 
@@ -52,65 +52,64 @@ A finding is not proof that a merge caused it: an old bug elsewhere, a manual ed
 
 - Run the backup (or confirm the owner has one) and the check. Both are safe. Show the owner the report as it is.
 - **Do not run any repair below unless the owner has said yes to that specific repair**, after seeing what it changes. "Fix whatever you find", "do what's sensible" or "approve all" is not a yes to a specific repair: present the repairs again and let the owner choose. Record what they chose and when.
-- **Never delete MD-1 vectors before the owner has reviewed them** (see below): they can be the last copy of a deleted memory.
+- **Remove vectors only with `repair:merge-vectors`**, never with a hand-written `DELETE`: it keeps every vector it removes, so nothing is destroyed. Even so, run it only after the owner's yes.
 - Do not paste memory content (the `content` column, observation text) into a chat or an issue. Show it to the owner locally.
 - If anything in the report surprises you or doesn't match this page, stop and tell the owner. Don't improvise a repair.
 
 ## Step 3 — repairs, one at a time, owner's choice
 
-Upgrade to 4.1.2 first: on an older release, deletes and edits keep producing MD-1 and MD-2. Each block below is wrapped in a transaction that ends in `ROLLBACK`, so running it as written changes nothing and shows how many rows it *would* change. Only when the owner has agreed, change `ROLLBACK` to `COMMIT` and run it again. Run the check again after each one. Order matters where it says so.
+Upgrade to 4.1.2 first: on an older release, deletes and edits keep producing MD-1 and MD-2. Run the check again after each repair.
 
-**MD-1 — vectors of deleted memories. Review before anything.** Export them first and let the owner read them locally:
+### The vector findings (MD-1 to MD-4): one command, nothing destroyed
 
-```sql
-\copy (SELECT id, source_id, content, metadata FROM embeddings e WHERE source_type = 'observation' AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = e.source_id) ORDER BY id) TO 'orphan-vectors.csv' CSV HEADER
+```bash
+PG_URL='postgres://…' npm run repair:merge-vectors             # dry run: shows what it would do, changes nothing
+PG_URL='postgres://…' npm run repair:merge-vectors -- --apply  # does it
 ```
 
-If any of them are memories the owner wants back (likely after a merge of an entity into itself), re-create them as new memories with `mind_write` before going further. Only then, if the owner wants the leftovers gone:
+What it does, in one transaction:
+
+| | Finding | What happens to it |
+|---|---|---|
+| MD-1 | Vectors of memories that no longer exist | **moved** to `embeddings_recovered` |
+| MD-2 | Extra vectors of one memory | **moved** to `embeddings_recovered`. The one kept is at the memory's current key, where edits write, so it holds the newest text; otherwise the newest. |
+| MD-3 | Vectors filed under the old entity | re-filed under the memory's current entity and name. The vector values are not recomputed. |
+| MD-4 | Vectors of deleted entities | **moved** to `embeddings_recovered` |
+
+**Nothing is deleted outright.** Each vector is removed from `embeddings` and written to `embeddings_recovered` in the same statement, with its id, source, text (`content`), metadata, the vector itself and the reason (`MD-1`, `MD-2` or `MD-4`). Search stops seeing them, and you can still read them or put them back. This matters most for MD-1: if a merge of an entity into itself deleted memories, these vectors hold the only remaining copy of their text.
+
+Before it commits, the tool re-counts inside the transaction:
+- every removed vector must be in `embeddings_recovered`;
+- not one memory may have changed (count and content);
+- MD-1 to MD-4 must be clear.
+
+If any of that fails, it rolls back and changes nothing (exit `2`). Writes to `embeddings` wait for the few moments it runs; reads continue. It is safe to run again: a second run finds nothing to do. It never prints memory content.
+
+Resonant Mind never reads `embeddings_recovered`. It is not part of the schema migrations (a new migration would disturb in-flight v3.2 → v4 migrations), so the tool creates it the first time `--apply` runs. Keep it as long as you like. Only drop it once the owner has read what is in it and decided nothing there is wanted.
+
+**Reading what was kept** (locally, with the owner; don't paste it into a chat):
 
 ```sql
-BEGIN;
-DELETE FROM embeddings e WHERE source_type = 'observation'
-  AND NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = e.source_id);
-ROLLBACK;  -- COMMIT only after the owner has reviewed the export
+SELECT recovered_id, reason, id, source_id, recovered_at, content
+  FROM embeddings_recovered ORDER BY recovered_id;
 ```
 
-**MD-2 — more than one vector per memory. Do this before MD-3.** Keeps the vector at the memory's current key (where edits write, so it holds the newest text), otherwise the newest:
+**Getting a memory back** (MD-1 rows): if the owner recognises a memory they lost, re-create it with `mind_write` from its `content`. It gets a new id and a fresh vector. The row in `embeddings_recovered` can stay.
 
-```sql
-BEGIN;
-DELETE FROM embeddings e
- WHERE e.source_type = 'observation'
-   AND EXISTS (SELECT 1 FROM observations o WHERE o.id = e.source_id)
-   AND e.id <> (
-     SELECT k.id FROM embeddings k JOIN observations o ON o.id = k.source_id
-      WHERE k.source_type = 'observation' AND k.source_id = e.source_id
-      ORDER BY (k.id = 'obs-' || o.entity_id || '-' || o.id) DESC, k.created_at DESC NULLS LAST, k.id DESC
-      LIMIT 1);
-ROLLBACK;
-```
-
-**MD-3 — vectors filed under the old entity.** Re-files each vector under its memory's current entity and name. The vector values are not recomputed. Fails with a duplicate-key error (and changes nothing) while MD-2 still has findings, including when MD-2 was only dry-run; commit MD-2 first.
-
-```sql
-BEGIN;
-UPDATE embeddings e
-   SET id = 'obs-' || o.entity_id || '-' || o.id,
-       metadata = jsonb_set(COALESCE(e.metadata, '{}'::jsonb), '{entity}', to_jsonb(x.name))
-  FROM observations o JOIN entities x ON x.id = o.entity_id
- WHERE e.source_type = 'observation' AND e.source_id = o.id
-   AND (e.id <> 'obs-' || o.entity_id || '-' || o.id OR e.metadata->>'entity' IS DISTINCT FROM x.name);
-ROLLBACK;
-```
-
-**MD-4 — entity vectors of deleted entities.**
+**Undoing the repair for one vector** puts it back exactly as it was, under its old id:
 
 ```sql
 BEGIN;
-DELETE FROM embeddings e WHERE source_type = 'entity'
-  AND NOT EXISTS (SELECT 1 FROM entities x WHERE x.id = e.source_id);
-ROLLBACK;
+INSERT INTO embeddings (id, source_type, source_id, embedding, content, metadata, created_at)
+SELECT id, source_type, source_id, embedding, content, metadata, created_at
+  FROM embeddings_recovered WHERE recovered_id = 123;   -- the row to put back
+DELETE FROM embeddings_recovered WHERE recovered_id = 123;
+ROLLBACK;  -- COMMIT once the owner has agreed
 ```
+
+### The other findings
+
+Each block below is wrapped in a transaction that ends in `ROLLBACK`, so running it as written changes nothing and shows how many rows it *would* change. Only when the owner has agreed, change `ROLLBACK` to `COMMIT` and run it again.
 
 **MD-5 — person/node link pointing at a deleted entity.** Points each memory's subject at the entity it already belongs to (`entity_id`):
 

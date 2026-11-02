@@ -18,6 +18,7 @@
     "test:migration": "vitest run tests/migration",
     "scan:release": "node scripts/scan-release.mjs",
     "check:merge-damage": "node scripts/check-merge-damage.mjs",
+    "repair:merge-vectors": "node scripts/repair-merge-vectors.mjs",
     "db:migrate": "node scripts/migrate-postgres.mjs",
     "migrate:v32": "node scripts/v32-to-v4/cli.mjs",
     "verify:v32-fixtures": "node scripts/verify-v32-fixtures.mjs",
