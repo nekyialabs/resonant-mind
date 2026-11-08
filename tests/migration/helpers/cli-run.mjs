@@ -8,7 +8,7 @@ export const cliPath = resolve(repositoryRoot, 'scripts/v32-to-v4/cli.mjs');
 
 /** Runs the migrator as a separate process, exactly as an operator (or an agent) would. */
 export function runCli(args, env = {}) {
-  const result = spawnSync(process.execPath, [cliPath, ...args], { cwd: repositoryRoot, encoding: 'utf8', env: { ...process.env, ...env } });
+  const result = spawnSync(process.execPath, [cliPath, ...args], { cwd: repositoryRoot, encoding: 'utf8', windowsHide: true, env: { ...process.env, ...env } });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, output: `${result.stdout}\n${result.stderr}` };
 }
 

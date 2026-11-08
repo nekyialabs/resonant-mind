@@ -130,7 +130,18 @@ function rejectBanned(tokens) {
   }
 }
 
-function validatePragma(tokens) {
+const ENFORCEMENT_ON = new Set(['on', 'true', '1']);
+// The adapter loads an export with foreign keys off and proves them afterwards (foreign_key_check over the whole database). A dump
+// that turns enforcement back on makes SQLite check each row as it arrives, so a row that points at a later row fails with an error that
+// names nothing. wrangler never writes this line (it writes only `PRAGMA defer_foreign_keys=TRUE;`), so the dump was edited or made
+// by something else, and the owner is told to take the line out. `PRAGMA foreign_keys=OFF` is accepted.
+function refuseEnforcementOn(tokens, statementNumber) {
+  if (word(tokens[1]) !== 'foreign_keys' || tokens.length !== 4 || tokens[2].value !== '=' || !ENFORCEMENT_ON.has(String(tokens[3].value).toLowerCase())) return;
+  throw unsafe('The D1 SQL export turns foreign-key enforcement on (PRAGMA foreign_keys=ON). wrangler never writes this line; delete it and run again. The migrator loads the export with enforcement off and then checks every foreign key itself.', { reason: 'foreign-keys-on', statement_number: statementNumber, pragma: 'foreign_keys' });
+}
+
+function validatePragma(tokens, statementNumber) {
+  refuseEnforcementOn(tokens, statementNumber);
   if (!SAFE_PRAGMAS.has(word(tokens[1]))) throw unsafe('The D1 SQL export contains a refused PRAGMA capability.', { capability: 'pragma' });
   if (tokens[2]?.value === '.') throw unsafe('The D1 SQL export cannot address a schema-qualified PRAGMA.');
   if (tokens.length < 4 || tokens[2].value !== '=' || tokens.length !== 4 || !SAFE_PRAGMA_VALUES.has(word(tokens[3]))) {
@@ -208,7 +219,7 @@ export function validateD1Sql(sql) {
   // The export is replayed into SQLite and the connection is then closed, so a transaction that is still open
   // rolls back and its rows silently disappear. Track the transaction across the stream and refuse anything that does not balance.
   let transactionOpen = false;
-  for (const statement of statements) {
+  for (const [position, statement] of statements.entries()) {
     rejectBanned(statement.tokens);
     const first = word(statement.tokens[0]);
     if (!first) continue;
@@ -223,7 +234,7 @@ export function validateD1Sql(sql) {
         if (!transactionOpen) throw unsafe('The D1 SQL export commits a transaction that was never begun.', { reason: 'commit-without-begin' });
         transactionOpen = false;
       }
-    } else if (first === 'pragma') validatePragma(statement.tokens);
+    } else if (first === 'pragma') validatePragma(statement.tokens, position + 1);
     else if (first === 'create') validateCreate(statement.tokens);
     else if (first === 'alter') validateAlter(statement.tokens);
     else if (first === 'drop') validateDrop(statement.tokens);
