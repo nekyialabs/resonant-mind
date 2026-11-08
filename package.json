@@ -1,6 +1,6 @@
 {
   "name": "resonant-mind",
-  "version": "4.1.2",
+  "version": "4.1.3",
   "private": true,
   "description": "A Postgres-backed cognitive substrate for persistent AI memory, identity, dreams, drives, and relational continuity",
   "license": "SEE LICENSE IN LICENSE",

@@ -4,7 +4,9 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0�
 
 ---
 
-## [Unreleased]
+## [4.1.3] — 2026-11-08
+
+**The v3.2 → v4 migrator: an empty date or time is now a question the owner answers, not a dead end.** Only the migrator changes; a mind already running v4 needs to do nothing.
 
 ### Fixed
 
