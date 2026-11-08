@@ -47,8 +47,11 @@ const MERGED_TIMESTAMPS = new Set(['created_at', 'updated_at']);
 function mergeTimestamp(rule, rows, survivor, field, policy) {
   const literal = rule !== null && typeof rule === 'object' && Object.hasOwn(rule, 'value');
   const selected = literal ? undefined : (rule !== null && typeof rule === 'object' ? (rule.source_id ?? rule.choose_source_id ?? rule.id) : rule);
-  const donor = literal ? undefined : (selected === undefined ? survivor : rows.find((row) => String(row.id) === String(selected)));
-  const raw = literal ? rule.value : donor?.[field];
+  // the same rule forms, and the same refusals, as mergeValue: no rule means the survivor; an object rule must name a source or a value
+  if (!literal && rule !== undefined && selected === undefined) throw new TypeError(`Merge field ${field} has no deterministic source or value.`);
+  const donor = literal ? undefined : (rule === undefined ? survivor : rows.find((row) => String(row.id) === String(selected)));
+  if (!literal && donor === undefined) throw new TypeError(`Merge field ${field} references an unknown source ID.`);
+  const raw = literal ? rule.value : donor[field];
   if (raw === null || raw === undefined) return null;
   const choice = donor === undefined ? undefined : decisionItemForCell(policy, { table: 'entities', rowHash: canonicalSha256(donor), type: 'timestamp', field });
   try { return normalizeTimestamp(raw, { choice, table: 'entities', field, row: donor }); } catch (error) {

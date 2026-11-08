@@ -292,6 +292,13 @@ describe('an entity merge copies a timestamp only through the donor cell\'s revi
     expect(() => buildIdMaps(bundle.tables, unreviewedMerge)).toThrow(MigrationRefusal);
   });
 
+  it('refuses a timestamp rule naming an unknown source, or no source, as other merge fields do', () => {
+    const bundle = mergeBundle(donorEmpty);
+    const withRule = (rule) => ({ items: [{ type: 'duplicate-entity-name', source_table: 'entities', source_id: 1, source_row_sha256: canonicalSha256(survivor), decision_id: 'x', choice: { action: 'merge', survivor_id: 1, merged_ids: [1, 2], field_rules: { ...rules('created_at', survivor), created_at: rule } } }] });
+    expect(() => buildIdMaps(bundle.tables, withRule({ source_id: 99 }))).toThrow(/unknown source ID/u);
+    expect(() => buildIdMaps(bundle.tables, withRule({}))).toThrow(/no deterministic source or value/u);
+  });
+
   it('lands the donor cell\'s reviewed replace-timestamp, and compare holds the target to it', () => {
     const bundle = mergeBundle(donorEmpty);
     const decisions = decide(bundle, rules('created_at', donorEmpty), { '2.created_at': { action: 'replace-timestamp', value: '2025-12-31T23:00:00-02:00' } });
