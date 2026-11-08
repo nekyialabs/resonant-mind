@@ -1,6 +1,8 @@
 import { canonicalJson } from '../lib/canonical-json.mjs';
 import { canonicalSha256 } from '../lib/hash.mjs';
-import { choiceForItem } from '../policy/generate.mjs';
+import { choiceForItem, decisionItemForCell } from '../policy/generate.mjs';
+import { MigrationRefusal } from '../lib/refusal.mjs';
+import { normalizeTimestamp } from './value-map.mjs';
 
 const PERSON_KINDS = new Set(['self', 'person', 'peer_ai']);
 const NODE_KINDS = new Set(['concept', 'project', 'infrastructure', 'artifact', 'moment', 'session_log', 'practice', 'research', 'journal', 'community', 'emotional_pattern', 'relationship', 'self', 'place', 'object']);
@@ -38,9 +40,27 @@ function mergeValue(rule, rows, survivor, field) {
   }
   throw new TypeError(`Merge field ${field} has no deterministic source or value.`);
 }
-function mergeOverrides(choice, rows, survivor) {
+// A merge rule that copies created_at / updated_at from another row copies a source cell, so it is held to the rules every other timestamp
+// cell is: the donor cell's value-map outcome, which for '' or a naive time is the donor cell's own reviewed choice. Without one the
+// merge is refused, never written raw. A literal { value } in the rule is the owner's own text and gets the same reading with no choice.
+const MERGED_TIMESTAMPS = new Set(['created_at', 'updated_at']);
+function mergeTimestamp(rule, rows, survivor, field, policy) {
+  const literal = rule !== null && typeof rule === 'object' && Object.hasOwn(rule, 'value');
+  const selected = literal ? undefined : (rule !== null && typeof rule === 'object' ? (rule.source_id ?? rule.choose_source_id ?? rule.id) : rule);
+  // the same rule forms, and the same refusals, as mergeValue: no rule means the survivor; an object rule must name a source or a value
+  if (!literal && rule !== undefined && selected === undefined) throw new TypeError(`Merge field ${field} has no deterministic source or value.`);
+  const donor = literal ? undefined : (rule === undefined ? survivor : rows.find((row) => String(row.id) === String(selected)));
+  if (!literal && donor === undefined) throw new TypeError(`Merge field ${field} references an unknown source ID.`);
+  const raw = literal ? rule.value : donor[field];
+  if (raw === null || raw === undefined) return null;
+  const choice = donor === undefined ? undefined : decisionItemForCell(policy, { table: 'entities', rowHash: canonicalSha256(donor), type: 'timestamp', field });
+  try { return normalizeTimestamp(raw, { choice, table: 'entities', field, row: donor }); } catch (error) {
+    throw new MigrationRefusal({ code: 'RMIG-E-POLICY-UNRESOLVED', phase: 'compile-policy', summary: `A merge rule copies ${field} from a source cell that has no reviewed value (${error.message}). Answer that cell's own decision item, or give the rule a literal value.`, safe_details: { field, donor_id: donor?.id ?? null }, report_path: null });
+  }
+}
+function mergeOverrides(choice, rows, survivor, policy) {
   const overrides = {};
-  for (const field of ['name', 'entity_type', 'primary_context', 'salience', 'created_at', 'updated_at']) overrides[field] = mergeValue(choice.field_rules?.[field], rows, survivor, field);
+  for (const field of ['name', 'entity_type', 'primary_context', 'salience', 'created_at', 'updated_at']) overrides[field] = MERGED_TIMESTAMPS.has(field) ? mergeTimestamp(choice.field_rules?.[field], rows, survivor, field, policy) : mergeValue(choice.field_rules?.[field], rows, survivor, field);
   return overrides;
 }
 function stableRows(tables) { return Object.entries(tables).flatMap(([table, rows]) => (Array.isArray(rows) ? rows.map((row, index) => ({ table, row, index })) : [])).sort((a, b) => a.table.localeCompare(b.table) || String(idOf(a.row, a.index)).localeCompare(String(idOf(b.row, b.index)))); }
@@ -73,7 +93,7 @@ export function buildIdMaps(input, policy = input?.policy ?? input?.decisions) {
         if (!choice.field_rules || requiredFields.some((field) => !Object.hasOwn(choice.field_rules, field))) throw new TypeError('Merge choices require deterministic field_rules for every mapped entity field.');
         const sourceRows = tables.entities ?? []; const survivor = sourceRows.find((candidate) => String(candidate.id) === String(choice.survivor_id));
         if (!survivor) throw new TypeError(`Merge survivor ${String(choice.survivor_id)} does not exist.`);
-        targetId = scalar(choice.survivor_id); fieldValues = mergeOverrides(choice, sourceRows, survivor);
+        targetId = scalar(choice.survivor_id); fieldValues = mergeOverrides(choice, sourceRows, survivor, policy);
         finalKind = normalizedKind({ ...survivor, ...fieldValues }, choice); targetTable = choice.target_table ?? targetTableForKind(finalKind);
         if (targetTable !== targetTableForKind(finalKind)) throw new TypeError('Reviewed merge target_table disagrees with final entity kind.');
         targetName = fieldValues.name ?? survivor.name; merged = String(sourceId) !== String(choice.survivor_id);

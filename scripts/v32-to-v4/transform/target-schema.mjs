@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { canonicalJson } from '../lib/canonical-json.mjs';
 
 // Final public catalog, kept in lock-step with migrations/postgres/*.sql.
@@ -48,6 +49,29 @@ export const TARGET_SCHEMAS = Object.freeze({
   drive_events: schema({ id:'integer', perception:'text', appraisal:'jsonb', drive_deltas:'jsonb', advisory:'text', created_at:'timestamptz' }, ['id']),
   inner_entries: schema({ id:'integer', kind:'text', body:'text', about:'text', charge:'double', satisfied_at:'timestamptz', metadata:'jsonb', created_at:'timestamptz', archived_at:'timestamptz' }, ['id','kind','body'], { checks: { kind: new Set(['quiet_want','small_joy']) } }),
 });
+
+const SOURCE_MAP = JSON.parse(readFileSync(new URL('../spec/v3.2-to-v4-map.json', import.meta.url), 'utf8'));
+// Two v4 columns are nullable in the table but never hold NULL once a row has been imported: v4's entity routing trigger
+// (migrations/postgres/0005d_routing_triggers.sql) writes COALESCE(NEW.created_at, NOW()) and COALESCE(NEW.updated_at, NOW())
+// into people/nodes, so a source NULL there lands as the import time. "Set it to NULL" is therefore not an outcome the
+// target can hold for entities.created_at and entities.updated_at, and the review does not offer it.
+const ENTITY_TRIGGER_FILLED = new Set(['entities.created_at', 'entities.updated_at']);
+/**
+ * Whether a v3.2 cell (source table and column) may become NULL in v4. It reads the catalog above, which is kept in
+ * lock-step with migrations/postgres/*.sql: the source column maps (spec/v3.2-to-v4-map.json) to a target column, and that
+ * column is NULL-able unless the catalog lists it as required. `row` is optional; a tension that has been sat with takes its
+ * last_visited from created_at, so a NULL created_at on such a row would leave last_visited without a value to default from.
+ */
+export function targetColumnAllowsNull(sourceTable, sourceField, row) {
+  if (ENTITY_TRIGGER_FILLED.has(`${sourceTable}.${sourceField}`)) return false;
+  const mapping = SOURCE_MAP.find((entry) => entry.source_table === sourceTable);
+  const targetField = mapping?.column_map?.[sourceField];
+  if (!mapping || targetField === undefined) return false;
+  const targets = mapping.target_tables.map((name) => TARGET_SCHEMAS[name]).filter((schema) => schema !== undefined);
+  if (targets.length === 0 || targets.some((schema) => (schema.required ?? []).includes(targetField))) return false;
+  if (sourceTable === 'tensions' && sourceField === 'created_at' && row !== undefined && Number(row?.sit_count ?? 0) > 0) return false;
+  return true;
+}
 
 export const TARGET_ENUM_ALIASES = Object.freeze({
   observations: { weight: { low:'light', high:'heavy' }, certainty: { certain:'known', uncertain:'tentative', speculative:'tentative' }, charge: { dormant:'metabolized', archived:'metabolized' } },

@@ -110,6 +110,8 @@ For a remote D1 input:
 
 ```text
 STOP: RMIG-E-D1-REMOTE-UNSUPPORTED: export the remote D1 database manually and provide the unchanged local SQL file.
+
+STOP: RMIG-E-D1-SQL-UNSAFE with `reason: foreign-keys-on`: the SQL file turns foreign-key enforcement on (`PRAGMA foreign_keys=ON`, statement number in `safe_details`). `wrangler d1 export` never writes that line; tell the owner, and let them delete it or make a fresh export. Do not edit the export yourself.
 ```
 
 ## Export and bundle gate
@@ -147,7 +149,7 @@ The owner's review covers every kind of item the draft can hold (each is shown w
 - duplicate entity names: merge survivor plus field rules, or final names for deterministic rename;
 - final entity kind and `people`/`nodes` routing;
 - enum, context, and status mappings;
-- ambiguous timestamps/timezones and dates;
+- ambiguous timestamps/timezones and dates, and empty text (`''`) in a timestamp or date column, where the owner picks `exclude-row`, `replace-timestamp` or `normalize-date` with a value the owner gave, or `set-null` where the item offers it (never pick one for them, and never turn `''` into NULL or a date yourself);
 - malformed JSON shape-preserving mappings;
 - broken/excluded FK treatment, including nullable nulling;
 - observation-version ordering/tie breaks;

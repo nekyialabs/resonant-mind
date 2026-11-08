@@ -13,7 +13,7 @@ function sqlFile(text) {
 
 describe('local D1 SQL export adapter', () => {
   it('materializes PRAGMA, transactions, and quoted text beneath a fresh temp directory', async () => {
-    const source = sqlFile("PRAGMA foreign_keys=ON; BEGIN; CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO entities VALUES (1, 'O''Reilly'); COMMIT;");
+    const source = sqlFile("PRAGMA foreign_keys=OFF; BEGIN; CREATE TABLE entities (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO entities VALUES (1, 'O''Reilly'); COMMIT;");
     const adapter = createD1ExportAdapter({ source });
     const tempDirectory = adapter.tempDirectory;
     await adapter.beginSnapshot();
@@ -103,52 +103,76 @@ describe('local D1 SQL export adapter', () => {
     expect(rows).toEqual([{ id: 1, name: 'a' }]);
   });
 
-  // A dump's own PRAGMA can switch enforcement back on, because the guard allows foreign_keys (on/off/true/false/0/1) and
-  // the export is loaded one statement at a time. wrangler does not write it (it writes only `PRAGMA defer_foreign_keys=TRUE;`), and
-  // nothing wrong is let through: the result is the earlier refusal, with SQLite's own error and without the violation count.
+  // A dump's own PRAGMA can switch enforcement back on, because the guard allows foreign_keys (on/off/true/false/0/1) and the
+  // export is loaded one statement at a time. wrangler does not write it (it writes only `PRAGMA defer_foreign_keys=TRUE;`). The
+  // adapter used to load such a dump and fail with SQLite's own error and no violation count; it now refuses it before loading
+  // anything, says why, and says what to do. `PRAGMA foreign_keys=OFF` stays allowed.
   const SELF_REF = 'CREATE TABLE entities (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, superseded_by INTEGER REFERENCES entities(id)); ';
   const FORWARD = "INSERT INTO entities (id, name, superseded_by) VALUES (1, 'old', 2); INSERT INTO entities (id, name, superseded_by) VALUES (2, 'new', NULL); ";
   const DANGLING = "INSERT INTO entities (id, name, superseded_by) VALUES (1, 'old', 9); ";
   const bothRows = [{ id: 1, name: 'old', superseded_by: 2 }, { id: 2, name: 'new', superseded_by: null }];
-  const sqliteRefused = (error) => {
-    expect(error?.code).toBe('RMIG-E-SOURCE-FINGERPRINT');
-    expect(error?.safe_details).toMatchObject({ reason: 'ERR_SQLITE_ERROR', source_kind: 'd1-export' });
+  const enforcementRefused = (error, statementNumber) => {
+    expect(error?.code).toBe('RMIG-E-D1-SQL-UNSAFE');
+    expect(error?.phase).toBe('inspect-source');
+    expect(error?.summary).toMatch(/turns foreign-key enforcement on \(PRAGMA foreign_keys=ON\)\. wrangler never writes this line; delete it and run again\./u);
+    expect(error?.safe_details).toEqual({ reason: 'foreign-keys-on', statement_number: statementNumber, pragma: 'foreign_keys' });
     expect(error?.safe_details).not.toHaveProperty('foreign_key_violations');
   };
 
   it.each([
-    ['first', 'PRAGMA foreign_keys=ON; PRAGMA defer_foreign_keys=TRUE; '],
-    ['after the defer', 'PRAGMA defer_foreign_keys=TRUE; PRAGMA foreign_keys=ON; '],
-    ['alone', 'PRAGMA foreign_keys=ON; '],
-  ])('PRAGMA foreign_keys=ON (%s) turns enforcement back on, and defer_foreign_keys outside a transaction does not help', async (_label, pragmas) => {
-    sqliteRefused((await outcome(pragmas + SELF_REF + FORWARD)).error);
+    ['first', 'PRAGMA foreign_keys=ON; PRAGMA defer_foreign_keys=TRUE; ', 1],
+    ['after the defer', 'PRAGMA defer_foreign_keys=TRUE; PRAGMA foreign_keys=ON; ', 2],
+    ['alone', 'PRAGMA foreign_keys=ON; ', 1],
+  ])('refuses PRAGMA foreign_keys=ON (%s) before loading anything, and names the statement', async (_label, pragmas, number) => {
+    enforcementRefused((await outcome(pragmas + SELF_REF + FORWARD)).error, number);
   });
 
-  it('turns enforcement on for the rows after PRAGMA foreign_keys=ON, even when the tables were created before it', async () => {
-    sqliteRefused((await outcome('PRAGMA defer_foreign_keys=TRUE; ' + SELF_REF + 'PRAGMA foreign_keys=ON; ' + FORWARD)).error);
+  it('refuses PRAGMA foreign_keys=ON after the tables were created, with the statement number counted from the top of the file', async () => {
+    enforcementRefused((await outcome('PRAGMA defer_foreign_keys=TRUE; ' + SELF_REF + 'PRAGMA foreign_keys=ON; ' + FORWARD)).error, 3);
   });
 
-  it('lets PRAGMA foreign_keys=OFF turn it off again, and then reads the forward reference', async () => {
-    const { error, rows } = await outcome('PRAGMA foreign_keys=ON; PRAGMA foreign_keys=OFF; ' + SELF_REF + FORWARD);
+  it.each([['ON'], ['on'], ['On'], ['TRUE'], ['true'], ['1']])('refuses the spelling foreign_keys=%s, whatever its case', async (value) => {
+    enforcementRefused((await outcome(`PRAGMA foreign_keys = ${value}; ` + SELF_REF + FORWARD)).error, 1);
+  });
+
+  it('refuses PRAGMA foreign_keys=ON even where a deferral would make the rows load, and inside BEGIN ... COMMIT', async () => {
+    enforcementRefused((await outcome('PRAGMA foreign_keys=ON; BEGIN TRANSACTION; PRAGMA defer_foreign_keys=TRUE; ' + SELF_REF + FORWARD + 'COMMIT;')).error, 1);
+    enforcementRefused((await outcome('BEGIN TRANSACTION; PRAGMA foreign_keys=ON; ' + SELF_REF + FORWARD + 'COMMIT;')).error, 2);
+    enforcementRefused((await outcome('PRAGMA foreign_keys=ON; BEGIN TRANSACTION; PRAGMA defer_foreign_keys=TRUE; ' + SELF_REF + DANGLING + 'COMMIT;')).error, 1);
+  });
+
+  it('refuses a dump that turns enforcement on and off again, because it still switched it on', async () => {
+    enforcementRefused((await outcome('PRAGMA foreign_keys=ON; PRAGMA foreign_keys=OFF; ' + SELF_REF + FORWARD)).error, 1);
+  });
+
+  // numeric PRAGMA values are number tokens, not words; the guard reads 0 and 1 for every safe pragma
+  it('loads PRAGMA foreign_keys=0 with enforcement off, reads the forward reference, and still runs the full foreign-key check afterwards', async () => {
+    const loaded = await outcome('PRAGMA foreign_keys=0; ' + SELF_REF + FORWARD);
+    expect(loaded.error).toBeUndefined();
+    expect(loaded.rows).toEqual(bothRows);
+    const { error } = await outcome('PRAGMA foreign_keys = 0; ' + SELF_REF + DANGLING);
+    expect(error?.code).toBe('RMIG-E-SOURCE-FINGERPRINT');
+    expect(error?.safe_details).toMatchObject({ foreign_key_violations: 1, tables: ['entities'] });
+  });
+
+  it.each([['defer_foreign_keys=1'], ['defer_foreign_keys=0'], ['recursive_triggers=1'], ['recursive_triggers=0'], ['legacy_alter_table=1'], ['legacy_alter_table=0'], ['DEFER_FOREIGN_KEYS = TRUE']])('accepts PRAGMA %s', async (pragma) => {
+    const { error, rows } = await outcome(`PRAGMA ${pragma}; ` + SELF_REF + FORWARD);
     expect(error).toBeUndefined();
     expect(rows).toEqual(bothRows);
   });
 
-  it('reads a forward reference under foreign_keys=ON when defer_foreign_keys is set inside BEGIN ... COMMIT, where it holds until the COMMIT', async () => {
-    const { error, rows } = await outcome('PRAGMA foreign_keys=ON; BEGIN TRANSACTION; PRAGMA defer_foreign_keys=TRUE; ' + SELF_REF + FORWARD + 'COMMIT;');
-    expect(error).toBeUndefined();
-    expect(rows).toEqual(bothRows);
+  it.each([['foreign_keys=2'], ['foreign_keys=-1'], ['foreign_keys=1.0'], ['foreign_keys=00'], ['defer_foreign_keys=2'], ['defer_foreign_keys=-1'], ['recursive_triggers=2'], ['legacy_alter_table=-1'], ['foreign_keys=\'0\'']])('still refuses the junk value in PRAGMA %s', async (pragma) => {
+    const { error } = await outcome(`PRAGMA ${pragma}; ` + SELF_REF + FORWARD);
+    expect(error?.code).toBe('RMIG-E-D1-SQL-UNSAFE');
+    expect(error?.safe_details).toEqual({ capability: 'pragma-assignment' });
   });
 
-  it('reads a forward reference when PRAGMA foreign_keys=ON comes inside BEGIN, where SQLite ignores it', async () => {
-    const { error, rows } = await outcome('BEGIN TRANSACTION; PRAGMA foreign_keys=ON; ' + SELF_REF + FORWARD + 'COMMIT;');
-    expect(error).toBeUndefined();
-    expect(rows).toEqual(bothRows);
-  });
-
-  it('still refuses a dangling reference under foreign_keys=ON and a deferral, at the COMMIT', async () => {
-    const pragmas = 'PRAGMA foreign_keys=ON; BEGIN TRANSACTION; PRAGMA defer_foreign_keys=TRUE; ';
-    sqliteRefused((await outcome(pragmas + SELF_REF + DANGLING + 'COMMIT;')).error);
+  it('still loads PRAGMA foreign_keys=OFF, and then reads the forward reference', async () => {
+    for (const off of ['PRAGMA foreign_keys=OFF; ', 'pragma foreign_keys = false; ', 'PRAGMA FOREIGN_KEYS=off; ']) {
+      const { error, rows } = await outcome(off + SELF_REF + FORWARD);
+      expect(error, off).toBeUndefined();
+      expect(rows, off).toEqual(bothRows);
+    }
   });
 
   // SQLite rolls an open transaction back when the connection closes, so a dump that is cut off inside BEGIN (or never commits) would
@@ -176,7 +200,7 @@ describe('local D1 SQL export adapter', () => {
   });
 
   it('refuses a dangling reference in a dump that never commits as an unterminated transaction, not by the foreign key check', async () => {
-    txRefused((await outcome('PRAGMA foreign_keys=ON; BEGIN TRANSACTION; PRAGMA defer_foreign_keys=TRUE; ' + SELF_REF + DANGLING)).error, 'unterminated-transaction');
+    txRefused((await outcome('PRAGMA foreign_keys=OFF; BEGIN TRANSACTION; PRAGMA defer_foreign_keys=TRUE; ' + SELF_REF + DANGLING)).error, 'unterminated-transaction');
   });
 
   it('refuses a BEGIN while a transaction is already open', async () => {

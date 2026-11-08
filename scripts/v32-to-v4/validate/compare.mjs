@@ -18,9 +18,9 @@ import { canonicalSha256 } from '../lib/hash.mjs';
 import { parseInstantMicros } from '../lib/instant.mjs';
 import { jsonSurvivesParsing, sameJsonLossless } from '../lib/lossless-json.mjs';
 import { sourceKey } from '../transform/id-map.mjs';
-import { KIND_NORMALIZATIONS, SQLITE_UTC, DATE_FIELDS, TIMESTAMP_FIELDS, contextVocabulary, decisionItemForCell } from '../policy/generate.mjs';
+import { KIND_NORMALIZATIONS, ISO_WITH_OFFSET, SQLITE_UTC, DATE_FIELDS, TIMESTAMP_FIELDS, contextVocabulary, decisionItemForCell } from '../policy/generate.mjs';
 import { ALIASES, ENUMS, ENUM_FIELDS } from '../transform/value-map.mjs';
-import { TARGET_SCHEMAS } from '../transform/target-schema.mjs';
+import { TARGET_SCHEMAS, targetColumnAllowsNull } from '../transform/target-schema.mjs';
 
 const MAP = JSON.parse(readFileSync(new URL('../spec/v3.2-to-v4-map.json', import.meta.url), 'utf8'));
 const JSON_FIELDS = new Set(['links', 'connections', 'tags', 'source_observation_ids', 'data', 'sit_notes']);
@@ -102,6 +102,23 @@ function mergeFieldValue(rule, byId, survivor, field) {
   const selected = rule !== null && typeof rule === 'object' ? (rule.source_id ?? rule.choose_source_id ?? rule.id) : rule;
   return byId.get(String(selected))?.[field];
 }
+// The instant a merge rule gives created_at / updated_at, worked out from the donor cell and its own reviewed choice (an empty cell takes the
+// donor's replace-timestamp, a naive one its reviewed timezone), not from the compiled policy. null: the donor cell is NULL. 'unreadable': it has no reviewed value.
+function mergeInstant(rule, byId, survivor, field, decisions) {
+  if (rule !== null && typeof rule === 'object' && Object.hasOwn(rule, 'value')) { if (rule.value === null || rule.value === undefined) return null; try { return parseInstantMicros(rule.value); } catch { return 'unreadable'; } }
+  const selected = rule !== null && typeof rule === 'object' ? (rule.source_id ?? rule.choose_source_id ?? rule.id) : rule;
+  const donor = rule === undefined ? survivor : byId.get(String(selected));
+  const raw = donor?.[field];
+  if (raw === null || raw === undefined) return null;
+  const rowHash = canonicalSha256(donor);
+  try {
+    if (raw === '') {
+      const choice = reviewedChoice(decisions, 'entities', rowHash, 'timestamp', field);
+      return choiceAction(choice) === 'replace-timestamp' && typeof choice.value === 'string' && ISO_WITH_OFFSET.test(choice.value) ? parseInstantMicros(choice.value) : 'unreadable';
+    }
+    return sourceInstant(raw, { decisions, table: 'entities', field, rowHash }).micros;
+  } catch { return 'unreadable'; }
+}
 function reviewedEntityDecisions(decisions, entities) {
   const byId = new Map(entities.map((row) => [String(row.id), row]));
   const merges = new Map(); const renames = new Map();
@@ -113,7 +130,8 @@ function reviewedEntityDecisions(decisions, entities) {
       if (!survivor || !Array.isArray(choice.merged_ids) || !choice.field_rules) continue; // compiling the policy refuses these
       const values = Object.fromEntries(MERGE_FIELDS.map((field) => [field, mergeFieldValue(choice.field_rules[field], byId, survivor, field)]));
       const kind = String(choice.kind ?? choice.final_kind ?? KIND_NORMALIZATIONS.get(lower(values.entity_type)) ?? '').toLowerCase() || undefined;
-      for (const id of choice.merged_ids) merges.set(String(id), { survivor_id: choice.survivor_id, values, kind });
+      const instants = Object.fromEntries(['created_at', 'updated_at'].map((field) => [field, mergeInstant(choice.field_rules[field], byId, survivor, field, decisions)]));
+      for (const id of choice.merged_ids) merges.set(String(id), { survivor_id: choice.survivor_id, values, kind, instants });
     } else if (choiceAction(choice) === 'rename' && choice.names && typeof choice.names === 'object') {
       for (const [id, name] of Object.entries(choice.names)) renames.set(String(id), name);
     }
@@ -214,7 +232,10 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
       if (sourceTable === 'entities') {
         // the compiled policy may only skip a row as merged if the reviewed decisions merge it into a survivor, and the other way round
         if ((idEntry?.merged === true) !== mergedAway) findings.add(idEntry?.merged === true ? 'merged-row-without-reviewed-merge' : 'reviewed-merge-not-applied', where);
-        if (merge !== undefined && !mergedAway && canonicalJson(Object.fromEntries(MERGE_FIELDS.map((field) => [field, idEntry?.field_values?.[field] ?? null]))) !== canonicalJson(Object.fromEntries(MERGE_FIELDS.map((field) => [field, merge.values[field] ?? null])))) findings.add('merge-values-differ-from-reviewed-rules', where);
+        // created_at / updated_at are held to the instant the rule's donor cell means, not to the donor's raw text
+        const plannedInstant = (value) => { if (value === null || value === undefined) return null; try { return parseInstantMicros(value); } catch { return 'unreadable'; } };
+        const mergeTextFields = MERGE_FIELDS.filter((field) => field !== 'created_at' && field !== 'updated_at');
+        if (merge !== undefined && !mergedAway && (canonicalJson(Object.fromEntries(mergeTextFields.map((field) => [field, idEntry?.field_values?.[field] ?? null]))) !== canonicalJson(Object.fromEntries(mergeTextFields.map((field) => [field, merge.values[field] ?? null]))) || ['created_at', 'updated_at'].some((field) => String(plannedInstant(idEntry?.field_values?.[field])) !== String(merge.instants[field])))) findings.add('merge-values-differ-from-reviewed-rules', where);
         if (merge === undefined && renames.has(String(id)) && idEntry?.target_name !== renames.get(String(id))) findings.add('entity-name-differs-from-reviewed-decision', where);
       }
       if (idEntry?.merged) { summary.merged_by_review += 1; continue; }
@@ -249,6 +270,23 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
             }
             fail(tc, 'null-became-a-value'); return;
           }
+          if (sv === '') { // empty text, not NULL: the target holds exactly what the owner chose for this cell
+            const choice = reviewedChoice(decisions, sourceTable, rowHash, 'timestamp', sc);
+            const chosen = choiceAction(choice);
+            if (chosen === 'set-null') {
+              if (!targetColumnAllowsNull(sourceTable, sc, row)) fail(tc, 'empty-set-null-not-allowed');
+              else if (tv !== null && tv !== undefined) fail(tc, 'null-expected');
+              else bump('timestamp-reviewed-empty');
+              return;
+            }
+            let wanted = null;
+            if (chosen === 'replace-timestamp' && typeof choice.value === 'string' && ISO_WITH_OFFSET.test(choice.value)) { try { wanted = parseInstantMicros(choice.value); } catch { wanted = null; } }
+            if (wanted === null) { fail(tc, 'empty-unreviewed'); return; }
+            let held = null;
+            if (typeof tv === 'string') { try { held = parseInstantMicros(tv); } catch { held = null; } }
+            if (held !== wanted) fail(tc, 'instant'); else bump('timestamp-reviewed-empty');
+            return;
+          }
           let expected;
           try { expected = sourceInstant(sv, { decisions, table: sourceTable, field: sc, rowHash }); } catch { fail(tc, 'source-timestamp-unreadable'); return; }
           let actual = null;
@@ -261,6 +299,17 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
         if (DATE_FIELDS.has(qualified)) {
           if (sv === null || sv === undefined) { if (tv !== null && tv !== undefined) fail(tc, 'null-became-a-value'); return; }
           const choice = reviewedChoice(decisions, sourceTable, rowHash, 'date', sc);
+          if (sv === '') { // empty text, not NULL: the target holds exactly what the owner chose for this cell
+            if (choiceAction(choice) === 'set-null') {
+              if (!targetColumnAllowsNull(sourceTable, sc, row)) fail(tc, 'empty-set-null-not-allowed');
+              else if (tv !== null && tv !== undefined) fail(tc, 'null-expected');
+              else bump('date-reviewed-empty');
+              return;
+            }
+            const wantedDate = choiceAction(choice) === 'normalize-date' && typeof choice.value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(choice.value) && !Number.isNaN(new Date(`${choice.value}T00:00:00.000Z`).valueOf()) && new Date(`${choice.value}T00:00:00.000Z`).toISOString().slice(0, 10) === choice.value ? choice.value : null;
+            if (wantedDate === null) fail(tc, 'empty-unreviewed'); else if (tv !== wantedDate) fail(tc, 'date'); else bump('date-reviewed-empty');
+            return;
+          }
           const expected = /^\d{4}-\d{2}-\d{2}$/u.test(sv) ? sv : (choiceAction(choice) === 'normalize-date' ? choice.value : null);
           if (expected === null || tv !== expected) fail(tc, 'date'); else if (expected !== sv) bump('date-reviewed-replacement');
           return;
@@ -322,6 +371,12 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
             const expectedKind = merge !== undefined ? merge.kind : derived;
             if (idEntry?.final_kind !== undefined && expectedKind !== undefined && expectedKind !== idEntry.final_kind) { findings.add('entity-kind-not-derivable', where); cells += 1; summary.cells_compared += 1; continue; }
             compareCell(sc, tc, value, { expected: idEntry?.final_kind, kind: 'entity-kind' });
+            continue;
+          }
+          if ((sc === 'created_at' || sc === 'updated_at') && merge !== undefined && merge.instants[sc] !== null) {
+            cells += 1; summary.cells_compared += 1;
+            let held = null; if (typeof target[tc] === 'string') { try { held = parseInstantMicros(target[tc]); } catch { held = null; } }
+            if (merge.instants[sc] === 'unreadable') fail(tc, 'source-timestamp-unreadable'); else if (held !== merge.instants[sc]) fail(tc, 'instant');
             continue;
           }
           if (override !== undefined) { compareCell(sc, tc, override); continue; }

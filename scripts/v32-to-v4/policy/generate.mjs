@@ -6,7 +6,7 @@ import { MigrationRefusal } from '../lib/refusal.mjs';
 import { verifyBundle, readBundleMember } from '../lib/bundle.mjs';
 import { jsonSurvivesParsing } from '../lib/lossless-json.mjs';
 import { parseInstantMicros } from '../lib/instant.mjs';
-import { OBS_CONTEXTS } from '../transform/target-schema.mjs';
+import { OBS_CONTEXTS, targetColumnAllowsNull } from '../transform/target-schema.mjs';
 
 const ISO_WITH_OFFSET = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3,})?(?:Z|[+-]\d{2}:\d{2})$/u;
 const SQLITE_UTC = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u;
@@ -107,6 +107,10 @@ function makeItem(type, table, row, index, reason, allowedChoices, extra = {}) {
 function add(items, seen, item) {
   if (!seen.has(item.decision_id)) { seen.add(item.decision_id); items.push(item); }
 }
+// An empty string in a timestamp or date column is not NULL and is not a time. Nothing in the source says what it meant, so the
+// owner chooses: leave the row out, store NULL (only where the v4 column can hold it), or give the instant / date it stands for.
+const EMPTY_TIMESTAMP = 'timestamp is empty text, not NULL; the owner must choose';
+const EMPTY_DATE = 'date is empty text, not NULL; the owner must choose';
 const NAIVE_TIMESTAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/u;
 const INVALID_TIMESTAMP = 'timestamp is invalid';
 function timestampAmbiguity(value) {
@@ -121,7 +125,11 @@ function timestampAmbiguity(value) {
   if (!/[zZ]|[+-]\d{2}:?\d{2}$/u.test(value)) return 'timestamp is naive and has no timezone offset';
   return INVALID_TIMESTAMP;
 }
-export { INVALID_TIMESTAMP };
+export { INVALID_TIMESTAMP, EMPTY_TIMESTAMP, EMPTY_DATE };
+/** The choices offered for an empty timestamp or date cell: always exclude-row and a reviewed value; set-null only where v4 can hold NULL there. */
+export function emptyCellChoices(table, field, row, replacement) {
+  return targetColumnAllowsNull(table, field, row) ? [replacement, 'set-null', 'exclude-row'] : [replacement, 'exclude-row'];
+}
 function dateAmbiguity(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value)) { const date = new Date(`${value}T00:00:00.000Z`); if (!Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value) return null; }
@@ -177,11 +185,15 @@ export function generateDecisionItems(bundle) {
 
   for (const [table, rows] of Object.entries(tables)) rows.forEach((row, index) => {
     for (const [field, value] of Object.entries(row)) {
-      if (DATE_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) {
+      if (DATE_FIELDS.has(`${table}.${field}`) && value === '') {
+        add(items, seen, makeItem('date', table, row, index, EMPTY_DATE, emptyCellChoices(table, field, row, 'normalize-date'), { field, observed_value_sha256: sha256Hex(''), required_choice_fields: { 'normalize-date': ['value'] } }));
+      } else if (DATE_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) {
         const reason = dateAmbiguity(value);
         if (reason) add(items, seen, makeItem('date', table, row, index, reason, ['normalize-date', 'exclude-row'], { field, observed_value_sha256: sha256Hex(String(value)), required_choice_fields: { 'normalize-date': ['value'] } }));
       }
-      if (TIMESTAMP_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) {
+      if (TIMESTAMP_FIELDS.has(`${table}.${field}`) && value === '') {
+        add(items, seen, makeItem('timestamp', table, row, index, EMPTY_TIMESTAMP, emptyCellChoices(table, field, row, 'replace-timestamp'), { field, observed_value_sha256: sha256Hex(''), required_choice_fields: { 'replace-timestamp': ['value'] } }));
+      } else if (TIMESTAMP_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) {
         const reason = timestampAmbiguity(value);
         if (reason) add(items, seen, makeItem('timestamp', table, row, index, reason, reason === INVALID_TIMESTAMP ? ['exclude-row'] : ['normalize-utc', 'exclude-row'], { field, observed_value_sha256: sha256Hex(String(value)) }));
       }
