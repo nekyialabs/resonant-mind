@@ -259,6 +259,16 @@ describe('operator migration documentation', () => {
     expect(oldGuide).toContain('../AGENT_MIGRATION_RUNBOOK.md');
   });
 
+  it('says what an empty timestamp or date is, and what a dump that turns foreign keys on gets', () => {
+    const guide = userGuide();
+    const empty = guide.slice(guide.indexOf('Empty text'), guide.indexOf('Every point-in-time column'));
+    for (const word of ['not NULL', 'policy item', 'exclude-row', 'replace-timestamp', 'normalize-date', 'set-null', 'entities.created_at', 'timestamp-reviewed-empty', 'date-reviewed-empty']) expect(empty, word).toContain(word);
+    expect(guide).toContain('PRAGMA foreign_keys=ON');
+    expect(guide).toMatch(/foreign_keys=ON[^\n]*RMIG-E-D1-SQL-UNSAFE/u);
+    expect(agentRunbook()).toContain('foreign-keys-on');
+    expect(agentRunbook()).toContain('replace-timestamp');
+  });
+
   it('does not include usable credentials or secret-shaped examples', () => {
     const text = `${userGuide()}\n${agentRunbook()}`;
     expect(text).not.toMatch(/postgres(?:ql)?:\/\/[^<\[\{\s`]+/iu);

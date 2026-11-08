@@ -4,6 +4,15 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0â
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **An empty timestamp or date cell is no longer a dead end in the v3.2 migrator** (#14). `''` in a timestamp or date column raised no decision item, the transform kept the empty text, and `validate` then refused the cell with `cell-mismatch`, so the owner had nothing to answer. It is now a decision item (`timestamp` or `date`, "is empty text, not NULL; the owner must choose") and the owner always picks: `exclude-row`; `set-null`, offered only where the v4 column can hold NULL (not for `entities.created_at` and `entities.updated_at`, which v4's routing trigger fills with the import time, nor for `tensions.created_at` on a tension that has been sat with); or a reviewed value, `replace-timestamp` with `value` (an RFC 3339 instant with an explicit offset) for a timestamp and `normalize-date` with `value` for a date. The value map treats an unreviewed `''` as an unresolved loss and never passes it through, policy validation refuses a `set-null` the item does not offer and a replacement that is not a real instant or date, and `validate` holds the target to exactly the chosen outcome and counts it (`timestamp-reviewed-empty`, `date-reviewed-empty`). NULL source values and every non-empty value behave as before. `USER_MIGRATION_GUIDE.md` and `AGENT_MIGRATION_RUNBOOK.md` now say so.
+- **A D1 export that switches foreign-key enforcement on is refused, clearly, before anything is loaded** (#14). The adapter loads an export with foreign keys off and checks them itself afterwards; a dump with its own `PRAGMA foreign_keys=ON` brought the forward-reference failure back as `RMIG-E-SOURCE-FINGERPRINT` with no violation count. Such a dump (`ON`, `TRUE` or `1`, any case, anywhere in the file) is now refused with `RMIG-E-D1-SQL-UNSAFE` and the message "The D1 SQL export turns foreign-key enforcement on (PRAGMA foreign_keys=ON). wrangler never writes this line; delete it and run again.", with the statement number in the details. `wrangler d1 export` writes only `PRAGMA defer_foreign_keys=TRUE;`, so a real export is unaffected, and `PRAGMA foreign_keys=OFF` still loads.
+
+---
+
 ## [4.1.2] â€” 2026-11-02
 
 **Entity merge no longer loses or misfiles anything, and a read-only check for what earlier merges left behind.** If your mind ever merged two entities, please read [`docs/merge-damage-check.md`](docs/merge-damage-check.md). It explains what a merge before this release can have left in your database, gives a read-only check (`npm run check:merge-damage`), a repair for the vector findings that destroys nothing (`npm run repair:merge-vectors`), and notes for the rest. Every repair is the owner's decision. Upgrading stops new damage; it does not repair old damage.

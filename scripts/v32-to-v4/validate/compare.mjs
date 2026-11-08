@@ -18,9 +18,9 @@ import { canonicalSha256 } from '../lib/hash.mjs';
 import { parseInstantMicros } from '../lib/instant.mjs';
 import { jsonSurvivesParsing, sameJsonLossless } from '../lib/lossless-json.mjs';
 import { sourceKey } from '../transform/id-map.mjs';
-import { KIND_NORMALIZATIONS, SQLITE_UTC, DATE_FIELDS, TIMESTAMP_FIELDS, contextVocabulary, decisionItemForCell } from '../policy/generate.mjs';
+import { KIND_NORMALIZATIONS, ISO_WITH_OFFSET, SQLITE_UTC, DATE_FIELDS, TIMESTAMP_FIELDS, contextVocabulary, decisionItemForCell } from '../policy/generate.mjs';
 import { ALIASES, ENUMS, ENUM_FIELDS } from '../transform/value-map.mjs';
-import { TARGET_SCHEMAS } from '../transform/target-schema.mjs';
+import { TARGET_SCHEMAS, targetColumnAllowsNull } from '../transform/target-schema.mjs';
 
 const MAP = JSON.parse(readFileSync(new URL('../spec/v3.2-to-v4-map.json', import.meta.url), 'utf8'));
 const JSON_FIELDS = new Set(['links', 'connections', 'tags', 'source_observation_ids', 'data', 'sit_notes']);
@@ -249,6 +249,23 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
             }
             fail(tc, 'null-became-a-value'); return;
           }
+          if (sv === '') { // empty text, not NULL: the target holds exactly what the owner chose for this cell
+            const choice = reviewedChoice(decisions, sourceTable, rowHash, 'timestamp', sc);
+            const chosen = choiceAction(choice);
+            if (chosen === 'set-null') {
+              if (!targetColumnAllowsNull(sourceTable, sc, row)) fail(tc, 'empty-set-null-not-allowed');
+              else if (tv !== null && tv !== undefined) fail(tc, 'null-expected');
+              else bump('timestamp-reviewed-empty');
+              return;
+            }
+            let wanted = null;
+            if (chosen === 'replace-timestamp' && typeof choice.value === 'string' && ISO_WITH_OFFSET.test(choice.value)) { try { wanted = parseInstantMicros(choice.value); } catch { wanted = null; } }
+            if (wanted === null) { fail(tc, 'empty-unreviewed'); return; }
+            let held = null;
+            if (typeof tv === 'string') { try { held = parseInstantMicros(tv); } catch { held = null; } }
+            if (held !== wanted) fail(tc, 'instant'); else bump('timestamp-reviewed-empty');
+            return;
+          }
           let expected;
           try { expected = sourceInstant(sv, { decisions, table: sourceTable, field: sc, rowHash }); } catch { fail(tc, 'source-timestamp-unreadable'); return; }
           let actual = null;
@@ -261,6 +278,17 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
         if (DATE_FIELDS.has(qualified)) {
           if (sv === null || sv === undefined) { if (tv !== null && tv !== undefined) fail(tc, 'null-became-a-value'); return; }
           const choice = reviewedChoice(decisions, sourceTable, rowHash, 'date', sc);
+          if (sv === '') { // empty text, not NULL: the target holds exactly what the owner chose for this cell
+            if (choiceAction(choice) === 'set-null') {
+              if (!targetColumnAllowsNull(sourceTable, sc, row)) fail(tc, 'empty-set-null-not-allowed');
+              else if (tv !== null && tv !== undefined) fail(tc, 'null-expected');
+              else bump('date-reviewed-empty');
+              return;
+            }
+            const wantedDate = choiceAction(choice) === 'normalize-date' && typeof choice.value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(choice.value) && !Number.isNaN(new Date(`${choice.value}T00:00:00.000Z`).valueOf()) && new Date(`${choice.value}T00:00:00.000Z`).toISOString().slice(0, 10) === choice.value ? choice.value : null;
+            if (wantedDate === null) fail(tc, 'empty-unreviewed'); else if (tv !== wantedDate) fail(tc, 'date'); else bump('date-reviewed-empty');
+            return;
+          }
           const expected = /^\d{4}-\d{2}-\d{2}$/u.test(sv) ? sv : (choiceAction(choice) === 'normalize-date' ? choice.value : null);
           if (expected === null || tv !== expected) fail(tc, 'date'); else if (expected !== sv) bump('date-reviewed-replacement');
           return;

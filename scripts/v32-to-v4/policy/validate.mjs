@@ -1,7 +1,9 @@
 import { canonicalJson } from '../lib/canonical-json.mjs';
 import { canonicalSha256 } from '../lib/hash.mjs';
 import { assertMigrationId, assertTimestamp, assertPlainData, FORMAT_VERSION } from '../lib/contracts.mjs';
-import { decisionManifestHash, generateDecisionItems, bundleHash } from './generate.mjs';
+import { decisionManifestHash, generateDecisionItems, bundleHash, ISO_WITH_OFFSET } from './generate.mjs';
+import { targetColumnAllowsNull } from '../transform/target-schema.mjs';
+import { parseInstantMicros } from '../lib/instant.mjs';
 import { hasHiddenCharacters } from '../lib/review-render.mjs';
 
 const HASH = /^[0-9a-f]{64}$/u;
@@ -29,6 +31,7 @@ function safeText(value, label) {
 function choiceValid(choice, item) {
   if (typeof choice === 'string') {
     if (WILDCARDS.has(choice.toLowerCase()) || !item.allowed_choices.includes(choice)) throw new TypeError(`Unsupported choice for ${item.decision_id}.`);
+    if ((item.type === 'timestamp' || item.type === 'date') && (item.required_choice_fields?.[choice] ?? []).length > 0) throw new TypeError(`Choice ${choice} requires ${item.required_choice_fields[choice].join(', ')}; give it as an object.`);
     return;
   }
   object(choice, `items[${item.decision_id}].choice`);
@@ -49,6 +52,18 @@ function choiceValid(choice, item) {
   if (required !== undefined) {
     if (!Array.isArray(required) || required.some((field) => typeof field !== 'string' || field.length === 0)) throw new TypeError('required_choice_fields is invalid.');
     for (const field of required) if (!Object.hasOwn(choice, field) || choice[field] === null || choice[field] === undefined || choice[field] === '') throw new TypeError(`Choice ${action} requires ${field}.`);
+  }
+  if (item.type === 'timestamp' || item.type === 'date') {
+    // a reviewed time or date is checked here, when the choice is recorded, not only when the value map applies it
+    if (action === 'set-null' && !targetColumnAllowsNull(item.source_table, item.field)) throw new TypeError(`set-null is not allowed for ${item.source_table}.${item.field}: its v4 column cannot hold NULL.`);
+    if (action === 'replace-timestamp') {
+      if (typeof choice.value !== 'string' || !ISO_WITH_OFFSET.test(choice.value)) throw new TypeError('replace-timestamp requires value: an RFC 3339 instant with an explicit offset.');
+      try { parseInstantMicros(choice.value); } catch { throw new TypeError('replace-timestamp value is not a real calendar instant.'); }
+    }
+    if (action === 'normalize-date') {
+      const real = typeof choice.value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(choice.value) && !Number.isNaN(new Date(`${choice.value}T00:00:00.000Z`).valueOf()) && new Date(`${choice.value}T00:00:00.000Z`).toISOString().slice(0, 10) === choice.value;
+      if (!real) throw new TypeError('normalize-date requires value: a real ISO date (YYYY-MM-DD).');
+    }
   }
   if (action === 'map-to-person' || action === 'map-to-node') {
     if (typeof choice.kind !== 'string' || choice.kind.length === 0) throw new TypeError(`${action} choices require a final kind.`);

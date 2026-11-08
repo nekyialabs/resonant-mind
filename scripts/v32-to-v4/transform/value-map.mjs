@@ -2,6 +2,7 @@ import { canonicalJson } from '../lib/canonical-json.mjs';
 import { canonicalSha256 } from '../lib/hash.mjs';
 import { KIND_NORMALIZATIONS, ISO_WITH_OFFSET, SQLITE_UTC, TIMESTAMP_FIELDS, DATE_FIELDS, KNOWN_CONTEXTS as CONTEXTS, contextVocabulary, decisionItemForCell } from '../policy/generate.mjs';
 import { choiceAction } from './id-map.mjs';
+import { targetColumnAllowsNull } from './target-schema.mjs';
 import { jsonSurvivesParsing } from '../lib/lossless-json.mjs';
 import { parseInstantMicros } from '../lib/instant.mjs';
 
@@ -24,9 +25,9 @@ const ALIASES = {
 const ENUM_FIELDS = new Set(['observations.salience', 'observations.weight', 'observations.certainty', 'observations.charge', 'observations.source', 'threads.thread_type', 'threads.status', 'threads.priority', 'relational_state.intensity']);
 function action(choice) { return choiceAction(choice); }
 // Enums, contexts and entity kinds treat only NULL as missing: the generator lists '' as a decision item (it is not in the
-// vocabulary) and validate holds the target to the reviewed choice, so the transform must apply it. Timestamps and dates keep
-// missing(): the generator raises no item for '', so there is no choice to apply.
-function missing(value) { return value === null || value === undefined || value === ''; }
+// vocabulary) and validate holds the target to the reviewed choice, so the transform must apply it. Timestamps and dates are
+// the same: the generator lists '' for them (type 'timestamp' / 'date') and the owner chooses exclude-row, set-null where v4 can
+// hold NULL, or a reviewed instant / date. An empty string without that choice is an unresolved loss, never passed through.
 function absent(value) { return value === null || value === undefined; }
 function policyChoice(policy, row, table, type, field) { return decisionItemForCell(policy, { table, rowHash: canonicalSha256(row), type, field }); }
 // A JavaScript Date counts milliseconds, PostgreSQL timestamptz counts microseconds, and the v4
@@ -45,8 +46,29 @@ function isoFromMicros(micros) {
   const inSecond = ((micros % 1_000_000n) + 1_000_000n) % 1_000_000n;
   return `${iso.slice(0, 19)}.${String(inSecond).padStart(6, '0')}Z`;
 }
-export function normalizeTimestamp(value, { choice, table, field } = {}) {
-  if (missing(value)) return value ?? null;
+// The reviewed outcome for an empty timestamp or date cell. `set-null` is accepted only where v4 can hold NULL in that column;
+// a replacement must be what the owner wrote down, exactly, and a real instant / date.
+function reviewedEmpty(kind, selected, { table, field, row }) {
+  const chosen = action(selected);
+  const label = `${kind === 'timestamp' ? 'Timestamp' : 'Date'} ${table ?? 'row'}.${field ?? 'value'}`;
+  if (chosen === 'set-null') {
+    if (table === undefined || field === undefined || !targetColumnAllowsNull(table, field, row)) throw new Error(`${label} is empty text and its v4 column cannot hold NULL; set-null is not an allowed choice.`);
+    return null;
+  }
+  if (kind === 'timestamp' && chosen === 'replace-timestamp') {
+    const replacement = selected?.value;
+    if (typeof replacement !== 'string' || !ISO_WITH_OFFSET.test(replacement)) throw new Error('A reviewed timestamp replacement must be an RFC 3339 instant with an explicit offset.');
+    return isoFromMicros(parseInstantMicros(replacement)); // a value that is not a real calendar instant throws
+  }
+  if (kind === 'date' && chosen === 'normalize-date') {
+    if (typeof selected.value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(selected.value)) throw new Error('Reviewed date choice must provide an ISO date.');
+    return normalizeDate(selected.value, { table, field });
+  }
+  throw new Error(`${label} is empty text, not NULL; it requires a reviewed choice.`);
+}
+export function normalizeTimestamp(value, { choice, table, field, row } = {}) {
+  if (value === null || value === undefined) return null;
+  if (value === '') return reviewedEmpty('timestamp', choice?.choice ?? choice, { table, field, row });
   if (typeof value !== 'string') throw new Error(`Timestamp ${table ?? 'row'}.${field ?? 'value'} requires a reviewed choice.`);
   if (ISO_WITH_OFFSET.test(value) || SQLITE_UTC.test(value)) return isoFromMicros(parseInstantMicros(value, { naiveOffset: 'UTC' })); // SQLite's own form is UTC; an invalid calendar value throws
   const selected = choice?.choice ?? choice;
@@ -56,8 +78,9 @@ export function normalizeTimestamp(value, { choice, table, field } = {}) {
   if (!NAIVE_TIMESTAMP.test(value)) throw new Error('A reviewed timezone applies only to a timestamp that has no offset of its own.');
   return isoFromMicros(parseInstantMicros(value, { naiveOffset: timezone }));
 }
-export function normalizeDate(value, { choice, table, field } = {}) {
-  if (missing(value)) return value ?? null;
+export function normalizeDate(value, { choice, table, field, row } = {}) {
+  if (value === null || value === undefined) return null;
+  if (value === '') return reviewedEmpty('date', choice?.choice ?? choice, { table, field, row });
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(value)) {
     const date = new Date(`${value}T00:00:00.000Z`); if (!Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value) return value;
   }
@@ -114,8 +137,8 @@ export function buildValueMaps({ tables = {}, policy, skipRows = new Set() } = {
   for (const [table, rows] of Object.entries(tables)) for (const row of rows ?? []) {
     const rowHash = canonicalSha256(row); if (skipRows.has(`${table}:${rowHash}`)) continue;
     for (const [field, value] of Object.entries(row)) {
-      if (DATE_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'date', field); try { output.dates[`${table}:${rowHash}:${field}`] = normalizeDate(value, { choice: item, table, field }); } catch (error) { losses.push({ kind: 'unresolved-date', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
-      if (TIMESTAMP_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'timestamp', field); try { output.timestamps[`${table}:${rowHash}:${field}`] = normalizeTimestamp(value, { choice: item, table, field }); } catch (error) { losses.push({ kind: 'unresolved-timestamp', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
+      if (DATE_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'date', field); try { output.dates[`${table}:${rowHash}:${field}`] = normalizeDate(value, { choice: item, table, field, row }); } catch (error) { losses.push({ kind: 'unresolved-date', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
+      if (TIMESTAMP_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'timestamp', field); try { output.timestamps[`${table}:${rowHash}:${field}`] = normalizeTimestamp(value, { choice: item, table, field, row }); } catch (error) { losses.push({ kind: 'unresolved-timestamp', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
       if (ENUM_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'unknown-value', field); try { output.enums[`${table}:${rowHash}:${field}`] = normalizeEnum(value, field, { choice: item }); } catch (error) { losses.push({ kind: 'unresolved-enum', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
       if (['context', 'scope', 'primary_context'].includes(field) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'unknown-value', field); try { output.contexts[`${table}:${rowHash}:${field}`] = normalizeContext(value, { choice: item, table, field }); } catch (error) { losses.push({ kind: 'unresolved-context', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
       if (['links', 'connections', 'tags', 'source_observation_ids', 'data', 'sit_notes'].includes(field) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'malformed-json', field); try { output.json[`${table}:${rowHash}:${field}`] = normalizeJson(value, field === 'data' ? 'object' : field === 'sit_notes' ? 'array-or-object' : field === 'source_observation_ids' ? 'integer-array' : 'array', { choice: item }); } catch (error) { losses.push({ kind: 'unresolved-json', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
