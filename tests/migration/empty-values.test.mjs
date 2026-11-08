@@ -8,6 +8,7 @@ import { MigrationRefusal } from '../../scripts/v32-to-v4/lib/refusal.mjs';
 import { transformRelational } from '../../scripts/v32-to-v4/transform/relational.mjs';
 import { compareSourceToTarget } from '../../scripts/v32-to-v4/validate/compare.mjs';
 import { targetColumnAllowsNull } from '../../scripts/v32-to-v4/transform/target-schema.mjs';
+import { buildIdMaps } from '../../scripts/v32-to-v4/transform/id-map.mjs';
 import { buildValueMaps, normalizeContext, normalizeDate, normalizeEntityKind, normalizeEnum, normalizeTimestamp } from '../../scripts/v32-to-v4/transform/value-map.mjs';
 
 // An empty string is not a missing value. Where the generator lists it as a decision (enums, contexts, entity kinds: '' is not in the
@@ -255,5 +256,72 @@ describe('every layer applies the reviewed outcome of an empty timestamp or date
     const blank = structuredClone(decisions);
     blank.items.find((item) => item.source_table === 'observations' && item.source_id === 10).choice = 'exclude-row';
     expect(run(blank, structuredClone(plan.members))).toContainEqual(expect.objectContaining({ check: 'cell-mismatch', column: 'added_at', difference: 'empty-unreviewed' }));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// A merge rule that copies created_at / updated_at from another row copies a source cell, so it goes through the same rules as any other:
+// the donor cell's reviewed outcome, never the raw text.
+describe('an entity merge copies a timestamp only through the donor cell\'s reviewed value', () => {
+  const survivor = { id: 1, name: 'Ada', entity_type: 'person', primary_context: 'default', salience: 'active', created_at: T, updated_at: T };
+  const donorEmpty = { id: 2, name: 'Ada', entity_type: 'person', primary_context: 'default', salience: 'active', created_at: '', updated_at: T };
+  const donorNaive = { id: 3, name: 'Ada', entity_type: 'person', primary_context: 'default', salience: 'active', created_at: T, updated_at: '2026-02-03 04:05:06.5' };
+  const mergeBundle = (donor) => ({ migration_id: 'rmig_merge_empty_test', bundle_manifest_sha256: 'd'.repeat(64), tables: { entities: [survivor, donor], observations: [{ id: 1, entity_id: donor.id, content: 'moved', added_at: T }] } });
+  const rules = (field, donor) => ({ name: { source_id: 1 }, entity_type: { source_id: 1 }, primary_context: { source_id: 1 }, salience: { source_id: 1 }, created_at: { source_id: 1 }, updated_at: { source_id: 1 }, [field]: { source_id: donor.id } });
+  const decide = (bundle, mergeRules, own = {}) => {
+    const draft = generateDecisionManifest(bundle, { now: '2026-11-08T00:00:00.000Z' });
+    const items = draft.items.map((item) => ({ ...item, stated_by: 'owner', choice: item.type === 'duplicate-entity-name' ? { action: 'merge', survivor_id: 1, merged_ids: [1, bundle.tables.entities[1].id], field_rules: mergeRules } : own[`${item.source_id}.${item.field}`] }));
+    const manifest = { ...draft, items: items.filter((item) => item.choice !== undefined), reviewed: true, reviewed_by: 'test', reviewed_at: '2026-11-08T00:01:00.000Z' };
+    manifest.manifest_sha256 = decisionManifestHash(manifest);
+    return manifest;
+  };
+  const run = (bundle, decisions) => {
+    const compiled = compilePolicy({ bundle, decisions });
+    const plan = transformRelational({ bundle, compiledPolicy: compiled });
+    const compare = (members) => compareSourceToTarget({ sourceTables: bundle.tables, targetTables: members, compiled, decisions, importedAt: null, family: 'postgres' });
+    return { compiled, plan, compare };
+  };
+
+  it('refuses a rule that copies an empty created_at from a donor row nobody reviewed', () => {
+    const bundle = mergeBundle(donorEmpty);
+    // the donor's own item exists, but the owner chose to exclude it, which leaves its cell without a value to copy
+    const decisions = decide(bundle, rules('created_at', donorEmpty), { '2.created_at': 'exclude-row' });
+    expect(() => compilePolicy({ bundle, decisions })).toThrow(MigrationRefusal);
+    try { compilePolicy({ bundle, decisions }); } catch (error) { expect(error.code).toBe('RMIG-E-POLICY-UNRESOLVED'); expect(error.summary).toMatch(/created_at/u); }
+    const unreviewedMerge = { items: [{ type: 'duplicate-entity-name', source_table: 'entities', source_id: 1, source_row_sha256: canonicalSha256(survivor), decision_id: 'x', choice: { action: 'merge', survivor_id: 1, merged_ids: [1, 2], field_rules: rules('created_at', donorEmpty) } }] };
+    expect(() => buildIdMaps(bundle.tables, unreviewedMerge)).toThrow(MigrationRefusal);
+  });
+
+  it('lands the donor cell\'s reviewed replace-timestamp, and compare holds the target to it', () => {
+    const bundle = mergeBundle(donorEmpty);
+    const decisions = decide(bundle, rules('created_at', donorEmpty), { '2.created_at': { action: 'replace-timestamp', value: '2025-12-31T23:00:00-02:00' } });
+    const { compiled, plan, compare } = run(bundle, decisions);
+    expect(compiled.id_map['entities:1'].field_values.created_at).toBe('2026-01-01T01:00:00.000Z');
+    expect(plan.members.people).toEqual([expect.objectContaining({ id: 1, created_at: '2026-01-01T01:00:00.000Z' })]);
+    expect(compare(structuredClone(plan.members)).findings.samples).toEqual([]);
+    const raw = structuredClone(plan.members); raw.people[0].created_at = '';
+    expect(compare(raw).findings.samples).toContainEqual(expect.objectContaining({ check: 'cell-mismatch', column: 'created_at', difference: 'instant' }));
+    const wrong = structuredClone(plan.members); wrong.people[0].created_at = T;
+    expect(compare(wrong).findings.samples).toContainEqual(expect.objectContaining({ check: 'cell-mismatch', column: 'created_at' }));
+  });
+
+  it('lands a naive donor timestamp at its reviewed timezone, and refuses it with none', () => {
+    const bundle = mergeBundle(donorNaive);
+    const decisions = decide(bundle, rules('updated_at', donorNaive), { '3.updated_at': { action: 'normalize-utc', timezone: '+01:00' } });
+    const { compiled, plan, compare } = run(bundle, decisions);
+    expect(compiled.id_map['entities:1'].field_values.updated_at).toBe('2026-02-03T03:05:06.500Z');
+    expect(plan.members.people).toEqual([expect.objectContaining({ id: 1, updated_at: '2026-02-03T03:05:06.500Z' })]);
+    expect(compare(structuredClone(plan.members)).findings.samples).toEqual([]);
+    const utc = structuredClone(plan.members); utc.people[0].updated_at = '2026-02-03T04:05:06.500Z'; // the timezone was ignored
+    expect(compare(utc).findings.samples).toContainEqual(expect.objectContaining({ check: 'cell-mismatch', column: 'updated_at', difference: 'instant' }));
+    const unreviewed = decide(bundle, rules('updated_at', donorNaive), { '3.updated_at': 'exclude-row' });
+    expect(() => compilePolicy({ bundle, decisions: unreviewed })).toThrow(MigrationRefusal);
+  });
+
+  it('still copies an ordinary donor timestamp, as its normalized instant', () => {
+    const bundle = mergeBundle({ ...donorEmpty, created_at: '2026-01-05T00:00:00+02:00' });
+    const { plan, compare } = run(bundle, decide(bundle, rules('created_at', donorEmpty)));
+    expect(plan.members.people[0].created_at).toBe('2026-01-04T22:00:00.000Z');
+    expect(compare(structuredClone(plan.members)).findings.samples).toEqual([]);
   });
 });

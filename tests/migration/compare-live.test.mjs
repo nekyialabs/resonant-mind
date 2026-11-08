@@ -179,7 +179,7 @@ describe('a reviewed merge of duplicate entities', () => {
     // the survivor's own NULL updated_at is replaced by the reviewed rule (the merged row's value), so v4 fills in nothing
     expect(mergeCompiled.losses.filter((loss) => loss.kind === 'null-replaced-by-v4-default')).toEqual([]);
     expect(result.sanctioned['null-replaced-by-v4-default']).toBeUndefined();
-    expect(mergePlan.members.people).toEqual([expect.objectContaining({ id: 1, updated_at: '2026-01-06T00:00:00Z' })]);
+    expect(mergePlan.members.people).toEqual([expect.objectContaining({ id: 1, updated_at: '2026-01-06T00:00:00.000Z' })]);
   });
 
   it('refuses a survivor that took the wrong source row\'s field, and a duplicate that was left behind', () => {
