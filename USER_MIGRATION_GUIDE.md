@@ -69,7 +69,7 @@ Remote Cloudflare D1 manual export command:
 npx wrangler d1 export <binding-or-name> --remote --output <local.sql>
 ```
 
-Inspect the file, checksum it, and rehearse loading it into a new local SQLite database. Supply only that local file as `--source-kind d1-export --source <local.sql>`. A D1 name, URL, or remote binding passed to the CLI must refuse with `RMIG-E-D1-REMOTE-UNSUPPORTED`. A SQL file that contains `PRAGMA foreign_keys=ON` (or `=TRUE`, `=1`, in any case) is refused with `RMIG-E-D1-SQL-UNSAFE` before anything is loaded, and the refusal names the statement number: `wrangler d1 export` never writes that line (it writes only `PRAGMA defer_foreign_keys=TRUE;`), so delete it and run again. The migrator loads the export with foreign keys off and proves every foreign key itself afterwards. `PRAGMA foreign_keys=OFF` is accepted.
+Inspect the file, checksum it, and rehearse loading it into a new local SQLite database. Supply only that local file as `--source-kind d1-export --source <local.sql>`. A D1 name, URL, or remote binding passed to the CLI must refuse with `RMIG-E-D1-REMOTE-UNSUPPORTED`. A SQL file that contains `PRAGMA foreign_keys=ON` (or `=TRUE`, `=1`, in any case) is refused with `RMIG-E-D1-SQL-UNSAFE` before anything is loaded, and the refusal names the statement number: `wrangler d1 export` never writes that line (it writes only `PRAGMA defer_foreign_keys=TRUE;`), so delete it and run again. The migrator loads the export with foreign keys off and proves every foreign key itself afterwards. `PRAGMA foreign_keys=OFF` (or `=0`) is accepted; a number other than 0 or 1 in a PRAGMA is refused.
 
 ### Independent image/R2 backup
 

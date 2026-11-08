@@ -145,6 +145,28 @@ describe('local D1 SQL export adapter', () => {
     enforcementRefused((await outcome('PRAGMA foreign_keys=ON; PRAGMA foreign_keys=OFF; ' + SELF_REF + FORWARD)).error, 1);
   });
 
+  // numeric PRAGMA values are number tokens, not words; the guard reads 0 and 1 for every safe pragma
+  it('loads PRAGMA foreign_keys=0 with enforcement off, reads the forward reference, and still runs the full foreign-key check afterwards', async () => {
+    const loaded = await outcome('PRAGMA foreign_keys=0; ' + SELF_REF + FORWARD);
+    expect(loaded.error).toBeUndefined();
+    expect(loaded.rows).toEqual(bothRows);
+    const { error } = await outcome('PRAGMA foreign_keys = 0; ' + SELF_REF + DANGLING);
+    expect(error?.code).toBe('RMIG-E-SOURCE-FINGERPRINT');
+    expect(error?.safe_details).toMatchObject({ foreign_key_violations: 1, tables: ['entities'] });
+  });
+
+  it.each([['defer_foreign_keys=1'], ['defer_foreign_keys=0'], ['recursive_triggers=1'], ['recursive_triggers=0'], ['legacy_alter_table=1'], ['legacy_alter_table=0'], ['DEFER_FOREIGN_KEYS = TRUE']])('accepts PRAGMA %s', async (pragma) => {
+    const { error, rows } = await outcome(`PRAGMA ${pragma}; ` + SELF_REF + FORWARD);
+    expect(error).toBeUndefined();
+    expect(rows).toEqual(bothRows);
+  });
+
+  it.each([['foreign_keys=2'], ['foreign_keys=-1'], ['foreign_keys=1.0'], ['foreign_keys=00'], ['defer_foreign_keys=2'], ['defer_foreign_keys=-1'], ['recursive_triggers=2'], ['legacy_alter_table=-1'], ['foreign_keys=\'0\'']])('still refuses the junk value in PRAGMA %s', async (pragma) => {
+    const { error } = await outcome(`PRAGMA ${pragma}; ` + SELF_REF + FORWARD);
+    expect(error?.code).toBe('RMIG-E-D1-SQL-UNSAFE');
+    expect(error?.safe_details).toEqual({ capability: 'pragma-assignment' });
+  });
+
   it('still loads PRAGMA foreign_keys=OFF, and then reads the forward reference', async () => {
     for (const off of ['PRAGMA foreign_keys=OFF; ', 'pragma foreign_keys = false; ', 'PRAGMA FOREIGN_KEYS=off; ']) {
       const { error, rows } = await outcome(off + SELF_REF + FORWARD);

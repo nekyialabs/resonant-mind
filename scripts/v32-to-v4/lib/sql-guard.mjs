@@ -113,6 +113,12 @@ function word(token) {
   return token?.kind === 'word' ? token.value.toLowerCase() : null;
 }
 
+// A PRAGMA value is a word (ON, OFF, TRUE, FALSE) or a bare number (0, 1). A number is a 'number' token, not a word, so it has to be read as one;
+// anything else (a sign, a fraction, a string, a second token) is not in SAFE_PRAGMA_VALUES and is refused.
+function pragmaValue(token) {
+  return token?.kind === 'word' || token?.kind === 'number' ? token.value.toLowerCase() : null;
+}
+
 function isIdentifier(token) {
   return token?.kind === 'word' && WORD.test(token.value) || token?.kind === 'identifier';
 }
@@ -144,7 +150,7 @@ function validatePragma(tokens, statementNumber) {
   refuseEnforcementOn(tokens, statementNumber);
   if (!SAFE_PRAGMAS.has(word(tokens[1]))) throw unsafe('The D1 SQL export contains a refused PRAGMA capability.', { capability: 'pragma' });
   if (tokens[2]?.value === '.') throw unsafe('The D1 SQL export cannot address a schema-qualified PRAGMA.');
-  if (tokens.length < 4 || tokens[2].value !== '=' || tokens.length !== 4 || !SAFE_PRAGMA_VALUES.has(word(tokens[3]))) {
+  if (tokens.length < 4 || tokens[2].value !== '=' || tokens.length !== 4 || !SAFE_PRAGMA_VALUES.has(pragmaValue(tokens[3]))) {
     throw unsafe('The D1 SQL export contains a PRAGMA form that may target external state.', { capability: 'pragma-assignment' });
   }
 }
