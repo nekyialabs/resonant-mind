@@ -45,7 +45,7 @@ export function createD1ExportAdapter({ source } = {}) {
         throw refusal('RMIG-E-SOURCE-FINGERPRINT', 'The local D1 SQL export violates its own foreign keys.', { source_kind: 'd1-export', foreign_key_violations: violations.length, tables });
       }
     } finally { database.close(); }
-    return assertSourceAdapter(new SqliteV32Adapter({ source: materializedPath, allowAnyTables: true, tempDirectory, cleanupTemp: true }));
+    return assertSourceAdapter(new SqliteV32Adapter({ source: materializedPath, allowAnyTables: true, setAsideWranglerMigrations: true, tempDirectory, cleanupTemp: true }));
   } catch (error) {
     try { rmSync(tempDirectory, { recursive: true, force: true }); } catch { /* preserve the original refusal */ }
     if (error instanceof MigrationRefusal) throw error;

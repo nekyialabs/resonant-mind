@@ -42,7 +42,7 @@ async function tableCount(adapter, table) {
   return String(count);
 }
 
-function reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts, imageInventory, embeddingInventory, status, timestamp, migrationId }) {
+function reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts, imageInventory, embeddingInventory, wranglerMigrations = null, status, timestamp, migrationId }) {
   return {
     migrator_version: VERSION,
     phase: 'inspect-source',
@@ -60,6 +60,10 @@ function reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts
       ambiguity_counts: ambiguityCounts,
       image_inventory: imageInventory,
       embedding_inventory: embeddingInventory,
+      // d1-export only, and only when the export carried wrangler's own bookkeeping table in its exact shape: the
+      // names of the migrations wrangler recorded as applied, oldest first. The table itself is set aside: it is
+      // not in `tables`, not counted in any row total, and not exported into a bundle.
+      ...(wranglerMigrations === null ? {} : { d1_migrations_set_aside: wranglerMigrations }),
     },
   };
 }
@@ -86,7 +90,8 @@ export async function inspectSource({ sourceKind, source, reportPath, adapter: s
     const ambiguityCounts = typeof adapter.ambiguityCounts === 'function' ? await adapter.ambiguityCounts() : { duplicate_entity_names: 0, ambiguous_timestamps: 0, invalid_json: 0 };
     const imageInventory = typeof adapter.imageInventory === 'function' ? await adapter.imageInventory() : { row_count: tables.find((item) => item.name === 'images')?.row_count ?? '0' };
     const embeddingInventory = typeof adapter.embeddingInventory === 'function' ? await adapter.embeddingInventory() : [];
-    const report = createReport({ ...reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts, imageInventory, embeddingInventory, status: 'succeeded', timestamp, migrationId }) });
+    const wranglerMigrations = typeof adapter.wranglerMigrations === 'function' ? await adapter.wranglerMigrations() : null;
+    const report = createReport({ ...reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts, imageInventory, embeddingInventory, wranglerMigrations, status: 'succeeded', timestamp, migrationId }) });
     writeReportAtomic(reportPath, report);
     reportWritten = true;
     return report;

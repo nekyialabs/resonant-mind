@@ -98,8 +98,11 @@ export function createSqliteSource(path) {
 }
 
 /**
- * The same data as a local D1 SQL export, written the way a dump writes it: the schema as SQLite stores it
- * (tables first, then indexes), then one INSERT per row.
+ * The same data as a local D1 SQL export, written the way `wrangler d1 export` writes it (compare
+ * tests/fixtures/migration/v3.2/d1-export-stock.sql, a real one): wrangler's own d1_migrations bookkeeping
+ * table first, with a row for each migration `wrangler d1 migrations apply` ran, then the schema as SQLite
+ * stores it (tables first, then indexes), one INSERT per row, and the sqlite_sequence reset. Every real export
+ * has the d1_migrations table, so a test export without it tests something no operator will ever have.
  */
 export function createD1Export(path) {
   const database = new DatabaseSync(':memory:');
@@ -108,13 +111,22 @@ export function createD1Export(path) {
     database.exec(SQLITE_SEED);
     const literal = (value) => (value === null ? 'NULL' : typeof value === 'number' ? String(value) : `'${String(value).replaceAll("'", "''")}'`);
     const objects = database.prepare("SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name").all();
-    const lines = ['PRAGMA defer_foreign_keys=TRUE;'];
+    const migrationNames = ['0001_init.sql', '0002_enhanced_memory.sql', '0003_graph_health.sql'];
+    const lines = [
+      'PRAGMA defer_foreign_keys=TRUE;',
+      // wrangler's own text, tabs included
+      ['CREATE TABLE IF NOT EXISTS "d1_migrations"(', '@@id         INTEGER PRIMARY KEY AUTOINCREMENT,', '@@name       TEXT UNIQUE,', '@@applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL', ');'].join(String.fromCharCode(10)).replaceAll('@@', String.fromCharCode(9, 9)),
+      ...migrationNames.map((name, index) => `INSERT INTO "d1_migrations" ("id","name","applied_at") VALUES(${index + 1},'${name}','2026-01-01 00:00:0${index}');`),
+    ];
     for (const object of objects.filter((item) => item.type === 'table')) lines.push(`${object.sql};`);
     // parents before children, so the rows load without deferring any foreign key
     const order = (name) => (name === 'entities' ? 0 : name === 'observations' ? 1 : 2);
     for (const object of objects.filter((item) => item.type === 'table').sort((x, y) => order(x.name) - order(y.name) || x.name.localeCompare(y.name))) {
       for (const row of database.prepare(`SELECT * FROM "${object.name}"`).all()) lines.push(`INSERT INTO "${object.name}" (${Object.keys(row).map((key) => `"${key}"`).join(', ')}) VALUES (${Object.values(row).map(literal).join(', ')});`);
     }
+    lines.push('DELETE FROM sqlite_sequence;');
+    for (const row of database.prepare('SELECT name, seq FROM sqlite_sequence ORDER BY name').all()) lines.push(`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('${row.name}',${row.seq});`);
+    lines.push(`INSERT INTO "sqlite_sequence" ("name","seq") VALUES('d1_migrations',${migrationNames.length});`);
     for (const object of objects.filter((item) => item.type === 'index')) lines.push(`${object.sql};`);
     writeFileSync(path, lines.join(String.fromCharCode(10)) + String.fromCharCode(10));
   } finally { database.close(); }
