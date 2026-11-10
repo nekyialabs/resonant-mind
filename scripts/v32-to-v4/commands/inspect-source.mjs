@@ -42,7 +42,7 @@ async function tableCount(adapter, table) {
   return String(count);
 }
 
-function reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts, imageInventory, embeddingInventory, wranglerMigrations = null, status, timestamp, migrationId }) {
+function reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts, imageInventory, embeddingInventory, wranglerMigrations = null, sourceGuard = null, status, timestamp, migrationId }) {
   return {
     migrator_version: VERSION,
     phase: 'inspect-source',
@@ -64,6 +64,7 @@ function reportInput({ sourceKind, identity, comparison, tables, ambiguityCounts
       // names of the migrations wrangler recorded as applied, oldest first. The table itself is set aside: it is
       // not in `tables`, not counted in any row total, and not exported into a bundle.
       ...(wranglerMigrations === null ? {} : { d1_migrations_set_aside: wranglerMigrations }),
+      ...(sourceGuard === null ? {} : { source_guard: sourceGuard }),
     },
   };
 }
@@ -84,6 +85,14 @@ export async function inspectSource({ sourceKind, source, reportPath, adapter: s
       writeReportAtomic(reportPath, report);
       reportWritten = true;
       throw refusal('RMIG-E-SOURCE-FINGERPRINT', 'The source catalog is not the exact supported v3.2 schema.', { source_kind: sourceKind, expected_fingerprint: comparison.expectedFingerprint, actual_fingerprint: comparison.actualFingerprint, diff: comparison.diff }, reportPath);
+    }
+    // Outside the fingerprint, which is unchanged: what it cannot see (CHECK, collations, generated columns, ...).
+    const guardFindings = typeof adapter.sourceGuard === 'function' ? await adapter.sourceGuard() : [];
+    if (guardFindings.length > 0) {
+      const report = createReport({ ...reportInput({ sourceKind, identity, comparison, tables: [], ambiguityCounts: {}, imageInventory: {}, embeddingInventory: [], sourceGuard: guardFindings, status: 'refused', timestamp, migrationId }) });
+      writeReportAtomic(reportPath, report);
+      reportWritten = true;
+      throw refusal('RMIG-E-SOURCE-FINGERPRINT', 'The source has a CHECK constraint, collation, generated column or other schema feature the fingerprint cannot see, so it is not the exact v3.2 schema.', { source_kind: sourceKind, findings: guardFindings.slice(0, 24), finding_count: guardFindings.length }, reportPath);
     }
     const tables = [];
     for (const table of actualCatalog.tables) tables.push({ name: table.name, row_count: await tableCount(adapter, table.name) });

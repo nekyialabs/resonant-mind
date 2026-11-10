@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import { canonicalJson } from '../lib/canonical-json.mjs';
+import { sourceGuardFindings } from '../lib/source-guard.mjs';
 import { canonicalSha256 } from '../lib/hash.mjs';
 import { MigrationRefusal } from '../lib/refusal.mjs';
 import { sourceSpecFor } from '../lib/fingerprint.mjs';
@@ -81,6 +82,8 @@ function wranglerMigrationsShape() {
 // nothing else attached to it (no extra index, trigger or foreign key).
 function isWranglerMigrationsTable(db, catalogTable) {
   if (catalogTable === undefined) return false;
+  // the fingerprint cannot see a CHECK, a collation or a generated column: a table with any of them is not wrangler's
+  if (sourceGuardFindings(db, { tables: [WRANGLER_MIGRATIONS_TABLE] }).length > 0) return false;
   const reference = wranglerMigrationsShape();
   const strip = (table) => ({ ...table, unique_constraints: table.unique_constraints.map(({ name: _name, ...rest }) => rest) });
   if (canonicalJson(strip(catalogTable)) !== canonicalJson(strip(reference))) return false;
@@ -138,6 +141,11 @@ export class SqliteV32Adapter {
     const full = buildCatalog(this.#db);
     if (!this.#wranglerSetAsideNow(full)) return full;
     return { ...full, tables: full.tables.filter(({ name }) => name !== WRANGLER_MIGRATIONS_TABLE) };
+  }
+
+  // What the catalog fingerprint cannot see (see lib/source-guard.mjs), over every table that is not set aside.
+  sourceGuard() {
+    return sourceGuardFindings(this.#db, { tables: this.catalog().tables.map(({ name }) => name) });
   }
 
   // The migrations wrangler recorded as applied (oldest first), or null when the table is absent, is not in
