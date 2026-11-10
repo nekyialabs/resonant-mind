@@ -50,7 +50,7 @@ describe('v3.2 to v4 migration CLI', () => {
   });
 
   it('lists every command with its options, and per-command help', () => {
-    const commands = ['inspect-source', 'export', 'verify-bundle', 'draft-decisions', 'review-decisions', 'apply-decisions', 'compile-policy', 'plan-relational', 'inspect-target', 'prepare-target', 'dry-run', 'import', 'plan-images', 'copy-images', 'plan-reembed', 'validate', 'status'];
+    const commands = ['inspect-source', 'normalise-source', 'export', 'verify-bundle', 'draft-decisions', 'review-decisions', 'apply-decisions', 'compile-policy', 'plan-relational', 'inspect-target', 'prepare-target', 'dry-run', 'import', 'plan-images', 'copy-images', 'plan-reembed', 'validate', 'status'];
     expect(COMMANDS).toEqual(commands);
     const help = spawnCli(['--help']).stdout;
     for (const command of commands) expect(help, command).toMatch(new RegExp(`^  ${command} +[-\[(]`, 'mu'));
@@ -67,7 +67,7 @@ describe('v3.2 to v4 migration CLI', () => {
   it('documents exactly the options each command parser accepts', () => {
     // Every option a parser knows must be in the help for its command, and the help may not invent one.
     const sources = {
-      'inspect-source': ['inspect-source'], export: ['export'], 'verify-bundle': ['verify-bundle'], 'draft-decisions': ['draft-decisions'], 'review-decisions': ['review-decisions'], 'apply-decisions': ['apply-decisions'],
+      'inspect-source': ['inspect-source'], 'normalise-source': ['normalise-source'], export: ['export'], 'verify-bundle': ['verify-bundle'], 'draft-decisions': ['draft-decisions'], 'review-decisions': ['review-decisions'], 'apply-decisions': ['apply-decisions'],
       'compile-policy': ['compile-policy'], 'plan-relational': ['plan-relational'], 'plan-images': ['plan-images'], 'copy-images': ['copy-images'], 'plan-reembed': ['plan-reembed'], validate: ['validate'], status: ['status'],
       'inspect-target': ['target'], 'prepare-target': ['target'], 'dry-run': ['target'], import: ['target'],
     };

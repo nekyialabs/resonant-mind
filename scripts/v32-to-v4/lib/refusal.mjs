@@ -35,6 +35,8 @@ const REMEDIATIONS = Object.freeze({
   'RMIG-E-CHECKPOINT': 'Restore an intact append-only checkpoint chain and resume only with the same migration artifact.',
   'RMIG-E-CHECKPOINT-FAULT': 'Unset the test fault injection variable outside NODE_ENV=test and rerun the migration.',
   'RMIG-E-VALIDATION': 'Resolve every validation finding and rerun final validation.',
+  'RMIG-E-NORMALISE-UNRESOLVED': 'Resolve every unresolved item in the normalise-source report: pass the documented choice switch, or fix the copy of the source, then run again to new output paths.',
+  'RMIG-E-NORMALISE-FAILED': 'Do not use the output. Read the normalise-source report, fix the copy of the source, and run again to new output paths.',
   'RMIG-E-COMMAND-UNKNOWN': 'Run with --help and choose one listed migration command.',
   'RMIG-E-COMMAND-NOT-IMPLEMENTED': 'Use an implemented migration command or install a release that provides this phase.',
 });

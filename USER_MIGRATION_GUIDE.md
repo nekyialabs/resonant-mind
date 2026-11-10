@@ -69,6 +69,8 @@ Remote Cloudflare D1 manual export command:
 npx wrangler d1 export <binding-or-name> --remote --output <local.sql>
 ```
 
+Every `wrangler d1 export` also carries wrangler's own `d1_migrations` bookkeeping table. For `--source-kind d1-export` it is set aside when it is exactly wrangler's table (its applied migration names are recorded in the inspect report), so it never makes a stock export look like drift. If the export does not match the exact v3.2 schema for another reason, see "A source that has drifted from v3.2".
+
 Inspect the file, checksum it, and rehearse loading it into a new local SQLite database. Supply only that local file as `--source-kind d1-export --source <local.sql>`. A D1 name, URL, or remote binding passed to the CLI must refuse with `RMIG-E-D1-REMOTE-UNSUPPORTED`. A SQL file that contains `PRAGMA foreign_keys=ON` (or `=TRUE`, `=1`, in any case) is refused with `RMIG-E-D1-SQL-UNSAFE` before anything is loaded, and the refusal names the statement number: `wrangler d1 export` never writes that line (it writes only `PRAGMA defer_foreign_keys=TRUE;`), so delete it and run again. The migrator loads the export with foreign keys off and proves every foreign key itself afterwards. `PRAGMA foreign_keys=OFF` (or `=0`) is accepted; a number other than 0 or 1 in a PRAGMA is refused.
 
 ### Independent image/R2 backup
@@ -396,6 +398,8 @@ Every refusal is fail-closed. Refusals use exit code 2 (`2`), human text on stde
 | `RMIG-E-SOURCE-NOT-READONLY` | Source access was not read-only. Grant read-only access and rerun. |
 | `RMIG-E-D1-REMOTE-UNSUPPORTED` | A remote D1 name/URL was supplied. Run the manual `wrangler d1 export` and use the local SQL file. |
 | `RMIG-E-D1-SQL-UNSAFE` | The D1 SQL export contains unsupported statements/schema, or turns foreign-key enforcement on (`PRAGMA foreign_keys=ON`; the refusal gives the statement number). Produce a standard local export, or delete that line. |
+| `RMIG-E-NORMALISE-UNRESOLVED` | `normalise-source` found a NULL in a required column, a choice that collides, a missing required column or a table it could not copy. The report lists each item and writes no database. See "A source that has drifted from v3.2". |
+| `RMIG-E-NORMALISE-FAILED` | The normalised database failed a foreign-key, integrity or fingerprint check, so it was not kept. Fix the copy and run again to new paths. |
 | `RMIG-E-BUNDLE-PLAINTEXT-ACK` | Plaintext mode lacks both explicit flags. Use encryption or provide both flags after risk review. |
 | `RMIG-E-BUNDLE-INTEGRITY` | Bundle members or hashes changed. Regenerate from the verified source. |
 | `RMIG-E-BUNDLE-DECRYPT` | The passphrase does not match the unchanged bundle. Use the correct secret-managed passphrase file. |
@@ -438,6 +442,38 @@ To migrate anyway, keep the dreams out of the migration and bring them across af
 4. Only then insert the saved rows into v4's `dreams` table (`id`, `dream_date`, `content`, `emotional_seed`, `fragments`, `recurring_dream_id`, `recurrence_count`, `created_at`). Keep their `id`s, so `recurring_dream_id` still points at the right row; set `vectorized_at` to NULL, so the nightly sweep embeds a few each night; and set `composed_by = 'template'`, which is how v4 labels dreams from before composed dreams. Then move the id sequence past them: `SELECT setval(pg_get_serial_sequence('dreams', 'id'), (SELECT max(id) FROM dreams));`
 
 `validate` does not compare `dreams`, because v3.2 has no such table to compare with, so rows added in step 4 do not change its result. Adding them after `ready-for-cutover` keeps the proof about everything else clean.
+
+### A source that has drifted from v3.2
+
+`inspect-source` accepts only the exact public v3.2 schema. A database that was changed by hand (a column added, a table rebuilt, an index dropped) is refused with `RMIG-E-SOURCE-FINGERPRINT`, and the exact fingerprint is what lets `validate` prove nothing was lost, so there is no second, looser fingerprint. Instead `normalise-source` rebuilds your data into the exact v3.2 schema, on a copy, and sets aside everything that is not v3.2, so that you can put it back yourself after the import.
+
+1. Take your backup as usual and work only on a copy: the local `wrangler d1 export` file for D1, a copy of the SQLite file otherwise. `normalise-source` never writes in place: it reads the source, writes three new files, and refuses if any of them already exists.
+2. Run it:
+
+```bash
+node scripts/v32-to-v4/cli.mjs normalise-source \
+  --source-kind d1-export \
+  --source <local.sql> \
+  --out <normalised-v32.sqlite> \
+  --set-aside <set-aside.json> \
+  --report <normalise-report.json>
+```
+
+   `--source-kind sqlite` takes a SQLite file instead of an export. It exits 0 only when the normalised database has no unresolved item, no foreign-key violation, passes SQLite's integrity check and matches the exact v3.2 fingerprint; otherwise it exits 2, keeps the report and writes neither the database nor the set-aside file.
+3. Read the report (`details` in `--report`). It holds counts, table and column names and row ids, never row content:
+   - `tables`: for each v3.2 table, the rows in the source and the rows copied (they must be equal), the columns copied, the v3.2 columns the source did not have (`v32_only_columns`: they took their v3.2 defaults) and the columns the source has that v3.2 does not (`set_aside_columns`).
+   - `set_aside_tables`: tables v3.2 does not have, with their row counts.
+   - `possible_renames`: tables where the source lacks a v3.2 column and has a column v3.2 does not. A rename is never guessed: the source values (for example `tensions.visits`, or `observation_versions.edited_at`) are in the set-aside file, and the v3.2 column (`sit_count`, `changed_at`) took its default. If a pair is really a rename and you want the values carried, rename the column in your copy and run again.
+   - `ignored_source_objects`: views and triggers in the source. They are logic, not data, and are not carried.
+   - `resolved` and `unresolved`: see the next step.
+4. Resolve every `unresolved` item. A NULL in a column that v3.2 declares `NOT NULL` is never filled in silently:
+   - `entities.primary_context`: pass `--null-context-default` to give each entity with no context v3.2's own default, `'default'`. If an entity with no context has the same name as an entity already in `'default'` (or as another entity with no context), the choice would collide on `UNIQUE(name, primary_context)`; the item is `choice-collides` and lists the ids, and the run refuses. Rename or merge one of them in your copy and run again.
+   - any other column: there is no switch. Fix the value in your copy (the item lists the ids) and run again.
+   - `required-column-missing` and `copy-failed` name the table; correct the copy and run again.
+5. Run the whole migration, from `inspect-source` on, with `--source-kind sqlite --source <normalised-v32.sqlite>`. `export` and `verify-bundle` see the exact v3.2 schema and nothing else.
+6. Keep `set-aside.json` with the care you give the export itself: it holds your memory content in plain text (the file is created readable by you only). Its keys: `columns.<table>` lists, for each extra column, the primary key and the non-null values of the rows that have any (`rows[].key` and `rows[].values`); `tables.<table>` holds the whole rows of each extra table, with its original `ddl`. Integers beyond 2^53 are written as `{ "$integer": "..." }` and blobs as `{ "$blob_base64": "..." }`.
+
+A `wrangler d1 export` always carries wrangler's own bookkeeping table `d1_migrations`. For `--source-kind d1-export`, `inspect-source` sets it aside when it is exactly wrangler's table and records the names of the migrations it lists as applied in the report, under `details.d1_migrations_set_aside.applied`; it is never exported into the bundle and is not in the row counts. A table of that name in any other shape is drift. `normalise-source` treats it like any other extra table.
 
 ### Image rows with the path `pending`
 

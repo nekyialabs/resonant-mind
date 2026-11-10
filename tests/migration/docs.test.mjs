@@ -35,6 +35,8 @@ const refusalCodes = [
   'RMIG-E-CHECKPOINT',
   'RMIG-E-CHECKPOINT-FAULT',
   'RMIG-E-VALIDATION',
+  'RMIG-E-NORMALISE-UNRESOLVED',
+  'RMIG-E-NORMALISE-FAILED',
   'RMIG-E-COMMAND-UNKNOWN',
   'RMIG-E-COMMAND-NOT-IMPLEMENTED',
 ];
@@ -53,7 +55,7 @@ const requiredHeadings = [
 ];
 
 const exactCommands = [
-  'inspect-source', 'export', 'verify-bundle', 'draft-decisions', 'review-decisions', 'apply-decisions', 'compile-policy', 'plan-relational',
+  'inspect-source', 'normalise-source', 'export', 'verify-bundle', 'draft-decisions', 'review-decisions', 'apply-decisions', 'compile-policy', 'plan-relational',
   'inspect-target', 'prepare-target', 'dry-run', 'import', 'plan-images', 'copy-images',
   'plan-reembed', 'validate', 'status',
 ];

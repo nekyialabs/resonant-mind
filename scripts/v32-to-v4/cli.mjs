@@ -103,6 +103,14 @@ function runMain({
     const { clean: commandArgs } = stripCheckpointOptions(rawCommandArgs);
     maybeInjectCheckpointFault('__command-start__');
     if (runCommand !== undefined) return runCommand(command, commandArgs);
+    if (command === 'normalise-source') {
+      // loaded on demand: reading SQLite makes Node print its experimental-feature warning on stderr
+      return import('./commands/normalise-source.mjs').then((module) => {
+        const result = module.normaliseSourceCommand(module.parseNormaliseSourceArgs(commandArgs));
+        writeStdout(json ? `${canonicalJson(result)}\n` : module.humanNormaliseSourceResult(result));
+        return 0;
+      });
+    }
     if (command === 'export') {
       const parsed = parseExportArgs(commandArgs);
       return exportCommand(parsed).then((result) => {
