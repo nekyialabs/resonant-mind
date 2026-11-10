@@ -4,6 +4,21 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0�
 
 ---
 
+## [4.1.4] — 2026-11-10
+
+**The v3.2 → v4 migrator: D1 minds set up the way the v3.2 README says are no longer refused, and a supported route for minds whose schema drifted from v3.2.** Only the migrator changes; a mind already running v4 needs to do nothing.
+
+### Fixed
+
+- **A D1 export with wrangler's `d1_migrations` table is no longer refused** (#21, #22). A v3.2 D1 set up as the v3.2 README says (`wrangler d1 migrations apply`) carries wrangler's own bookkeeping table, `d1_migrations`, and every export of it was refused with `RMIG-E-SOURCE-FINGERPRINT`: the table counted as drift. A D1 whose migrations were run another way (for example `wrangler d1 execute --file`) has no such table and was unaffected, which is how the first real D1 migration in 4.1.1 got through. The test exports were built by hand and never had the table. `d1-export` now sets `d1_migrations` aside only when its shape is exactly wrangler's, records the applied migration names in the inspect report (`details.d1_migrations_set_aside`), and keeps it out of the catalog, the counts and the bundle; any other table of that name is still drift. The tests now use a real `wrangler d1 export` as a fixture, and the hand-built test export writes the table the way wrangler does. Found while checking #21, from Chetna's mind, reported by Sahil.
+- **`inspect-source` now refuses schema features the fingerprint could not see** (#22). The catalog comparison did not see CHECK constraints, generated or hidden columns, collations, `WITHOUT ROWID`, `STRICT`, or partial and expression indexes. v3.2 has none of them; a SQLite or D1 source that has any is now refused, with the findings in `details.source_guard`. The published v3.2 fingerprint is unchanged.
+
+### Added
+
+- **`normalise-source`, for a v3.2 source that drifted from the public schema** (#21, #22). An early or hand-patched install is refused by `inspect-source`, as it should be. `normalise-source` builds a **new** SQLite file in the exact public v3.2 schema from a copy: every shared column of every v3.2 table is carried, and everything else (extra columns with values, extra tables, generated columns) is set aside in `set-aside.json`, keyed by primary key, never dropped. It refuses rather than guesses: a NULL in a column v3.2 requires, unless the owner gives the documented choice (`--null-context-default` for `entities.primary_context`, which refuses on a name collision); a missing v3.2 table or key column; a virtual table, unless `--skip-virtual-tables`; schema it cannot read; and any carried value whose type or bytes the copy changed. It never writes in place or overwrites, and every refusal writes its report. `--restore-sql` writes a plain transaction, ending in `ROLLBACK`, that puts back the set-aside data v4 has a home for (`observation_sits`, `observations.last_sat_at`, `images.charge`, `view_count`, `last_viewed_at`) after `ready-for-cutover`; images that already hold v4 view data keep it. The tool never runs it. `USER_MIGRATION_GUIDE.md` has both steps, and says exactly what the proof covers: `validate` proves v4 against the normalised copy, not the original export. The generated restore SQL has not yet been run against a real migration.
+
+---
+
 ## [4.1.3] — 2026-11-08
 
 **The v3.2 → v4 migrator: an empty date or time is now a question the owner answers, not a dead end.** Only the migrator changes; a mind already running v4 needs to do nothing.
