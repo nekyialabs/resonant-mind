@@ -69,6 +69,8 @@ Remote Cloudflare D1 manual export command:
 npx wrangler d1 export <binding-or-name> --remote --output <local.sql>
 ```
 
+Every `wrangler d1 export` also carries wrangler's own `d1_migrations` bookkeeping table. For `--source-kind d1-export` it is set aside when it is exactly wrangler's table (its applied migration names are recorded in the inspect report), so it never makes a stock export look like drift. If the export does not match the exact v3.2 schema for another reason, see "A source that has drifted from v3.2".
+
 Inspect the file, checksum it, and rehearse loading it into a new local SQLite database. Supply only that local file as `--source-kind d1-export --source <local.sql>`. A D1 name, URL, or remote binding passed to the CLI must refuse with `RMIG-E-D1-REMOTE-UNSUPPORTED`. A SQL file that contains `PRAGMA foreign_keys=ON` (or `=TRUE`, `=1`, in any case) is refused with `RMIG-E-D1-SQL-UNSAFE` before anything is loaded, and the refusal names the statement number: `wrangler d1 export` never writes that line (it writes only `PRAGMA defer_foreign_keys=TRUE;`), so delete it and run again. The migrator loads the export with foreign keys off and proves every foreign key itself afterwards. `PRAGMA foreign_keys=OFF` (or `=0`) is accepted; a number other than 0 or 1 in a PRAGMA is refused.
 
 ### Independent image/R2 backup
@@ -396,6 +398,8 @@ Every refusal is fail-closed. Refusals use exit code 2 (`2`), human text on stde
 | `RMIG-E-SOURCE-NOT-READONLY` | Source access was not read-only. Grant read-only access and rerun. |
 | `RMIG-E-D1-REMOTE-UNSUPPORTED` | A remote D1 name/URL was supplied. Run the manual `wrangler d1 export` and use the local SQL file. |
 | `RMIG-E-D1-SQL-UNSAFE` | The D1 SQL export contains unsupported statements/schema, or turns foreign-key enforcement on (`PRAGMA foreign_keys=ON`; the refusal gives the statement number). Produce a standard local export, or delete that line. |
+| `RMIG-E-NORMALISE-UNRESOLVED` | `normalise-source` found a NULL in a required column, a choice that collides, a missing required column or a table it could not copy. The report lists each item and writes no database. See "A source that has drifted from v3.2". |
+| `RMIG-E-NORMALISE-FAILED` | The normalised database failed a foreign-key, integrity or fingerprint check, so it was not kept. Fix the copy and run again to new paths. |
 | `RMIG-E-BUNDLE-PLAINTEXT-ACK` | Plaintext mode lacks both explicit flags. Use encryption or provide both flags after risk review. |
 | `RMIG-E-BUNDLE-INTEGRITY` | Bundle members or hashes changed. Regenerate from the verified source. |
 | `RMIG-E-BUNDLE-DECRYPT` | The passphrase does not match the unchanged bundle. Use the correct secret-managed passphrase file. |
@@ -438,6 +442,72 @@ To migrate anyway, keep the dreams out of the migration and bring them across af
 4. Only then insert the saved rows into v4's `dreams` table (`id`, `dream_date`, `content`, `emotional_seed`, `fragments`, `recurring_dream_id`, `recurrence_count`, `created_at`). Keep their `id`s, so `recurring_dream_id` still points at the right row; set `vectorized_at` to NULL, so the nightly sweep embeds a few each night; and set `composed_by = 'template'`, which is how v4 labels dreams from before composed dreams. Then move the id sequence past them: `SELECT setval(pg_get_serial_sequence('dreams', 'id'), (SELECT max(id) FROM dreams));`
 
 `validate` does not compare `dreams`, because v3.2 has no such table to compare with, so rows added in step 4 do not change its result. Adding them after `ready-for-cutover` keeps the proof about everything else clean.
+
+### A source that has drifted from v3.2
+
+`inspect-source` accepts only the exact public v3.2 schema. A database that was changed by hand (a column added, a table rebuilt, an index dropped) is refused with `RMIG-E-SOURCE-FINGERPRINT`, and the exact fingerprint is what lets `validate` prove nothing was lost, so there is no second, looser fingerprint. Instead `normalise-source` rebuilds your data into the exact v3.2 schema, on a copy, and sets aside everything that is not v3.2, so that you can put it back yourself after the import.
+
+1. Take your backup as usual and work only on a copy: the local `wrangler d1 export` file for D1, a copy of the SQLite file otherwise. `normalise-source` never writes in place: it reads the source, writes new files, and refuses if any of them already exists.
+2. Run it:
+
+```bash
+node scripts/v32-to-v4/cli.mjs normalise-source \
+  --source-kind d1-export \
+  --source <local.sql> \
+  --out <normalised-v32.sqlite> \
+  --set-aside <set-aside.json> \
+  --report <normalise-report.json> \
+  --restore-sql <restore.sql>
+```
+
+   `--source-kind sqlite` takes a SQLite file instead of an export. `--restore-sql` is optional: it writes the SQL described in the next section. The command exits 0 only when the normalised database has no unresolved item, every carried value is unchanged, there is no foreign-key violation, SQLite's integrity check passes and the result matches the exact v3.2 fingerprint. Otherwise it exits 2, keeps only the report, and writes no database, set-aside file or restore SQL.
+3. Read the report (`details` in `--report`). It holds counts, table and column names and row ids, never row content:
+   - `tables`: for each v3.2 table, the rows in the source and the rows copied (they must be equal), the columns copied, the v3.2 columns the source did not have (`v32_only_columns`: they took their v3.2 defaults) and the columns the source has that v3.2 does not (`set_aside_columns`).
+   - `set_aside_tables`: tables v3.2 does not have, with their row counts.
+   - `possible_renames`: tables where the source lacks a v3.2 column and has a column v3.2 does not. A rename is never guessed: the source values (for example `tensions.visits`, or `observation_versions.edited_at`) are in the set-aside file, and the v3.2 column (`sit_count`, `changed_at`) took its default. If a pair is really a rename and you want the values carried, rename the column in your copy and run again.
+   - `ignored_source_objects`: views and triggers in the source. They are logic, not data, and are not carried.
+   - `resolved` and `unresolved`: see the next step.
+4. Resolve every `unresolved` item. Nothing is filled in, converted or skipped silently:
+   - `null-in-required-column`: a NULL in a column that v3.2 declares `NOT NULL`. For `entities.primary_context` pass `--null-context-default` to give each entity with no context v3.2's own default, `'default'`. If an entity with no context has the same name as an entity already in `'default'` (or as another entity with no context), the choice would collide on `UNIQUE(name, primary_context)`; the item is `choice-collides` and lists the ids. Rename or merge one of them in your copy and run again. For any other column there is no switch: fix the value in your copy (the item lists the ids).
+   - `value-changed-by-copy`: the v3.2 column types would change a value (SQLite turns the text `'007'` in an `INTEGER` column into the number 7). The item names the table, column, row keys and the two types, and never the values. Fix the value in your copy so that it is already of the v3.2 type.
+   - `table-missing-from-source`: a v3.2 table the source does not have. A missing table cannot be told apart from an empty one, so the run refuses; add the empty table to your copy if it is meant to be empty.
+   - `primary-key-column-missing`: a v3.2 key column (for example `id`) the source does not have, in a table that has rows. Rows could only be numbered afresh, which would renumber every id.
+   - `source-guard` and `virtual-table`: `inspect-source` refuses a schema feature the fingerprint cannot see (a generated or hidden column, a `CHECK`, a collation other than `BINARY`, `WITHOUT ROWID`, `STRICT`, a partial or expression index; `details.source_guard`), because it is checking what you migrate from. `normalise-source` builds the copy from the public DDL, so it only reports these in `source_features` and carries on, since they do not change the data it copies or sets aside (a changed value is refused by `value-changed-by-copy`). Three things are different: a generated column is derived, so it is set aside with `column_info.<name>.generated: true` and never carried; a virtual table keeps its contents out of both the copy and the set-aside file, so it refuses unless you pass `--skip-virtual-tables` (it is listed in `virtual_tables` either way, and its ordinary shadow tables are set aside); and SQL the scan cannot read, such as an unclosed quote or comment, refuses.
+   - `required-column-missing`, `copy-failed` and `analysis-failed` name the table; correct the copy and run again.
+5. Run the whole migration, from `inspect-source` on, with `--source-kind sqlite --source <normalised-v32.sqlite>`. `export` and `verify-bundle` see the exact v3.2 schema and nothing else.
+6. Keep `set-aside.json` and the restore SQL with the care you give the export itself: they hold your memory content in plain text. On Linux and macOS they are created readable by you only. **On Windows that is not enforced**, so keep them in a private folder and delete them after the restore. The tool removes its own temporary copies on every path out, including a refusal.
+7. The set-aside file's keys: `columns.<table>` lists, for each extra column, the primary key and the non-null values of the rows that have any (`rows[].key` and `rows[].values`); `tables.<table>` holds the whole rows of each extra table, with its original `ddl`. Integers beyond 2^53 are written as `{ "$integer": "..." }` and blobs as `{ "$blob_base64": "..." }`.
+
+**What the proof covers.** `validate` proves the v4 data against the *normalised copy*, not against your original export. Because a changed value is refused, what was carried is carried unchanged. Outside the proof: columns that were renamed, v3.2 columns that took their defaults, and everything in the set-aside file. Nothing proves the restore either: you check it by reading the restore SQL and its results.
+
+A `wrangler d1 export` always carries wrangler's own bookkeeping table `d1_migrations`. For `--source-kind d1-export`, `inspect-source` sets it aside when it is exactly wrangler's table (and has no `CHECK`, collation or generated column) and records the names of the migrations it lists as applied in the report, under `details.d1_migrations_set_aside.applied`; it is never exported into the bundle and is not in the row counts. A table of that name in any other shape is drift. `normalise-source` treats it like any other extra table.
+
+### Putting set-aside data back after the import
+
+Some of what a drifted install keeps has a home in v4. After `status` reports `ready-for-cutover`, and only then (so that the proof of everything else stays clean), put it back by id. The ids are the keys in `set-aside.json`: v4 keeps the id of an observation and of an image when it is valid, and a row that a reviewed decision excluded has no home, so every restore below joins on the id and lists what it could not place.
+
+| In `set-aside.json` | Has a home in v4 | Restored |
+|---|---|---|
+| `tables.observation_sits` | `observation_sits` (`id`, `observation_id`, `sit_note`, `sat_at`) | inserted, keeping the `id`s |
+| `columns.observations`, `last_sat_at` | `observations.last_sat_at` | updated by `id`, where v4 has none |
+| `columns.images`, `charge` | `images.charge` | updated by `id` (the migration carries no charge from v3.2) |
+| `columns.images`, `view_count`, `last_viewed_at` | `images.view_count`, `images.last_viewed_at` | updated by `id`, **only where v4 still has the defaults** (`view_count = 0` and `last_viewed_at IS NULL`) |
+
+Anything else (the other tables, `tensions.visits`, a column of your own) has no column in v4; keep it in the file. `observations.sit_count` is not in the list because it is a v3.2 column and was carried by the migration.
+
+**v4 values win for views.** v4's `view_count` and `last_viewed_at` were filled from v3.2's own `access_count` and `last_accessed_at`. An image that already has data there keeps v4's values; its set-aside `view_count` and `last_viewed_at` are **not restored**. The SQL shows you those images in a `SELECT` before it changes anything, with both sets of numbers side by side, and if one of them should win, you change that row yourself.
+
+**Generate the SQL, read it, run it.** Run `normalise-source` with `--restore-sql <file>` (step 2 above). The file is one plain SQL transaction written from the set-aside data. It is never run by the tool. In it:
+
+- strings are standard SQL literals with the quote doubled (no `E'...'`), and the script sets `standard_conforming_strings = on` for its own transaction;
+- every time is written as explicit UTC, for example `TIMESTAMPTZ '2026-05-20 08:00:00+00'`. SQLite stores `datetime('now')` as UTC text without a zone, and a bare cast would read it in the session's `TimeZone`. A value with its own offset keeps it. A value in any other form is left out and listed in a `NOT RESTORED` comment at the top (and in the report), never guessed;
+- `observation_sits` keep their ids, and `setval` moves the table's sequence past them, so the next ordinary insert does not reuse an id (the statement works for an empty table too);
+- the images step begins with the `SELECT` described above, and its `UPDATE` carries the `view_count = 0 AND last_viewed_at IS NULL` guard;
+- it ends in `ROLLBACK;`. Read every line and every result when you run it in `psql` against the v4 target (connected the way you connect for the migration), then change that last line to `COMMIT;`.
+
+Rows with no home (an observation or image the review excluded) are listed by `SELECT`s named `..._without_a_home`; the file does not insert them.
+
+`validate` compares the migrated rows with the source, and restoring changes some of them (`images.view_count`, `images.last_viewed_at`). Keep the validation report you have, which was taken before the restore, as the record of the migration, and expect a `validate` run after the restore to report those columns. Re-embedding receipts are bound to the image rows as the plan had them, so finish them before you restore. Delete `set-aside.json` and the restore SQL when you are done.
 
 ### Image rows with the path `pending`
 

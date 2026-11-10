@@ -13,6 +13,7 @@ export const REQUIRED_BUNDLE_ARTIFACTS = Object.freeze([
 export const MIGRATION_PHASES = Object.freeze([
   'runtime',
   'inspect-source',
+  'normalise-source',
   'export',
   'verify-bundle',
   'draft-decisions',

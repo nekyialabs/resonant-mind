@@ -4,6 +4,7 @@
 export const COMMAND_GROUPS = Object.freeze([
   ['Source and bundle', [
     ['inspect-source', ['--source-kind postgres|sqlite|d1-export', '--source <env:NAME | path>', '--report <file>']],
+    ['normalise-source', ['--source-kind sqlite|d1-export', '--source <path>', '--out <new sqlite file>', '--set-aside <new file>', '--report <new file>', '[--restore-sql <new file>]', '[--skip-virtual-tables]', '[--null-context-default]']],
     ['export', ['--source-kind postgres|sqlite|d1-export', '--source <env:NAME | path>', '--migration-id <id>', '--bundle <dir>', '[--source-report <file>]', '[--source-fingerprint <sha256>]', '[--passphrase-file <file>]', '[--allow-plaintext-bundle --acknowledge-plaintext-risk]']],
     ['verify-bundle', ['--bundle <dir>', '[--passphrase-file <file>]']],
   ]],

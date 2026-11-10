@@ -2,6 +2,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
+import { canonicalJson } from '../lib/canonical-json.mjs';
+import { sourceGuardFindings } from '../lib/source-guard.mjs';
 import { canonicalSha256 } from '../lib/hash.mjs';
 import { MigrationRefusal } from '../lib/refusal.mjs';
 import { sourceSpecFor } from '../lib/fingerprint.mjs';
@@ -61,14 +63,46 @@ function buildCatalog(db) {
   return { family: 'sqlite-v3.2-post-0003', catalog_version: 'v3.2.0-post-0003', tables };
 }
 
+// The bookkeeping table `wrangler d1 migrations apply` creates in every D1 database, so every `wrangler d1
+// export` carries it. It is not part of v3.2 and holds no memory. Only its exact DDL is recognised; a table
+// of that name in any other shape is not set aside, so it stays in the catalog and counts as drift.
+export const WRANGLER_MIGRATIONS_TABLE = 'd1_migrations';
+const WRANGLER_MIGRATIONS_DDL = 'CREATE TABLE "d1_migrations"(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)';
+
+function wranglerMigrationsShape() {
+  const reference = new DatabaseSync(':memory:');
+  try {
+    reference.exec(WRANGLER_MIGRATIONS_DDL);
+    return buildCatalog(reference).tables[0];
+  } finally { reference.close(); }
+}
+
+// True when `d1_migrations` is exactly wrangler's table: the same columns, types, nullability, defaults,
+// key and unique constraint (compared against a table built from wrangler's own DDL), AUTOINCREMENT, and
+// nothing else attached to it (no extra index, trigger or foreign key).
+function isWranglerMigrationsTable(db, catalogTable) {
+  if (catalogTable === undefined) return false;
+  // the fingerprint cannot see a CHECK, a collation or a generated column: a table with any of them is not wrangler's
+  if (sourceGuardFindings(db, { tables: [WRANGLER_MIGRATIONS_TABLE] }).length > 0) return false;
+  const reference = wranglerMigrationsShape();
+  const strip = (table) => ({ ...table, unique_constraints: table.unique_constraints.map(({ name: _name, ...rest }) => rest) });
+  if (canonicalJson(strip(catalogTable)) !== canonicalJson(strip(reference))) return false;
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(WRANGLER_MIGRATIONS_TABLE);
+  if (!/\bAUTOINCREMENT\b/iu.test(String(row?.sql ?? ''))) return false;
+  // an index made with CREATE INDEX (sql is not null), a trigger or a view on it is something wrangler never writes
+  const attached = db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE tbl_name = ? AND sql IS NOT NULL AND type <> 'table'").get(WRANGLER_MIGRATIONS_TABLE).n;
+  return attached === 0;
+}
+
 export class SqliteV32Adapter {
-  constructor({ source, destination, allowAnyTables = false, tempDirectory = null, cleanupTemp = false } = {}) {
+  constructor({ source, destination, allowAnyTables = false, setAsideWranglerMigrations = false, tempDirectory = null, cleanupTemp = false } = {}) {
     const real = sourceFile(source);
     if (destination && real === realpathSync.native(resolve(destination))) throw refusal('RMIG-E-SAME-SOURCE-TARGET', 'A source cannot also be its destination.', { source_kind: 'sqlite' });
     this.sourcePath = real;
     this.tempDirectory = tempDirectory;
     this.cleanupTemp = cleanupTemp;
     this.#allowAnyTables = allowAnyTables;
+    this.#setAsideWrangler = setAsideWranglerMigrations;
     this.#initial = { hash: hashFile(real), mtimeMs: statSync(real).mtimeMs, size: statSync(real).size };
     try {
       this.#db = new DatabaseSync(real, { readOnly: true });
@@ -81,6 +115,9 @@ export class SqliteV32Adapter {
 
   #db;
   #allowAnyTables;
+  #setAsideWrangler;
+  #wranglerChecked = false;
+  #wranglerSetAside = false;
   #initial;
   #snapshot;
   #closed;
@@ -89,7 +126,35 @@ export class SqliteV32Adapter {
     return { kind: this.tempDirectory ? 'd1-export' : 'sqlite', source_path: this.sourcePath, source_sha256: this.#initial.hash, size: this.#initial.size, mtime_ms: this.#initial.mtimeMs };
   }
 
-  catalog() { return buildCatalog(this.#db); }
+  // Whether wrangler's own d1_migrations table is present, in exactly its shape, and so set aside.
+  #wranglerSetAsideNow(full) {
+    if (!this.#setAsideWrangler) return false;
+    if (!this.#wranglerChecked) {
+      this.#wranglerSetAside = isWranglerMigrationsTable(this.#db, full.tables.find(({ name }) => name === WRANGLER_MIGRATIONS_TABLE));
+      this.#wranglerChecked = true;
+    }
+    return this.#wranglerSetAside;
+  }
+
+  // The catalog the fingerprint is compared with: without wrangler's bookkeeping table when that is set aside.
+  catalog() {
+    const full = buildCatalog(this.#db);
+    if (!this.#wranglerSetAsideNow(full)) return full;
+    return { ...full, tables: full.tables.filter(({ name }) => name !== WRANGLER_MIGRATIONS_TABLE) };
+  }
+
+  // What the catalog fingerprint cannot see (see lib/source-guard.mjs), over every table that is not set aside.
+  sourceGuard() {
+    return sourceGuardFindings(this.#db, { tables: this.catalog().tables.map(({ name }) => name) });
+  }
+
+  // The migrations wrangler recorded as applied (oldest first), or null when the table is absent, is not in
+  // wrangler's exact shape, or this is not a d1-export source. Names only; it is never exported or counted.
+  wranglerMigrations() {
+    if (!this.#wranglerSetAsideNow(buildCatalog(this.#db))) return null;
+    const applied = this.#db.prepare(`SELECT name FROM "${WRANGLER_MIGRATIONS_TABLE}" ORDER BY id`).all().map(({ name }) => name);
+    return { table: WRANGLER_MIGRATIONS_TABLE, applied };
+  }
 
   beginSnapshot() {
     if (this.#snapshot) return;

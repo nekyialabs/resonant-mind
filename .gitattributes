@@ -1,3 +1,4 @@
 # Tagged migration fixtures are byte-identical release evidence.
 tests/fixtures/migration/v3.2/*.sql -text
 tests/fixtures/migration/v3.2/d1/*.sql -text
+tests/fixtures/migration/v3.2-drifted/*.sql -text
