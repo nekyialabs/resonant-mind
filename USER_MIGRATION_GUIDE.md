@@ -475,6 +475,90 @@ node scripts/v32-to-v4/cli.mjs normalise-source \
 
 A `wrangler d1 export` always carries wrangler's own bookkeeping table `d1_migrations`. For `--source-kind d1-export`, `inspect-source` sets it aside when it is exactly wrangler's table and records the names of the migrations it lists as applied in the report, under `details.d1_migrations_set_aside.applied`; it is never exported into the bundle and is not in the row counts. A table of that name in any other shape is drift. `normalise-source` treats it like any other extra table.
 
+### Putting set-aside data back after the import
+
+Some of what a drifted install keeps has a home in v4. After `status` reports `ready-for-cutover`, and only then (so that the proof of everything else stays clean), put it back by id. The ids are the keys in `set-aside.json`: v4 keeps the id of an observation and of an image when it is valid, and a row that a reviewed decision excluded has no home, so every restore below joins on the id and lists what it could not place.
+
+| In `set-aside.json` | Has a home in v4 | |
+|---|---|---|
+| `tables.observation_sits` | `observation_sits` (`id`, `observation_id`, `sit_note`, `sat_at`) | insert, keeping `id`s |
+| `columns.observations`, `last_sat_at` | `observations.last_sat_at` | update by `id` |
+| `columns.images`, `charge` | `images.charge` | update by `id` |
+| `columns.images`, `view_count`, `last_viewed_at` | `images.view_count`, `images.last_viewed_at` | update by `id` |
+
+Anything else (the other tables, `tensions.visits`, a column of your own) has no column in v4; keep it in the file. `observations.sit_count` is not in the list because it is a v3.2 column and was carried by the migration.
+
+**Time zones.** SQLite stores `datetime('now')` as UTC text, `YYYY-MM-DD HH:MM:SS`, with no zone. v4's columns are `timestamptz`, and a bare cast (`'2026-05-20 08:00:00'::timestamptz`) reads the text in the session's `TimeZone`, so a session set to anything but UTC shifts every value. Read the text as UTC explicitly, as in the statements below (`value::timestamp AT TIME ZONE 'UTC'`). First check that every value has that shape, because a value written by something else (a `T`, a `Z`, an offset) must not be read as UTC by assumption:
+
+```sql
+SELECT id FROM restore_sits WHERE sat_at !~ '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$';
+```
+
+Run the same query for each staging table below. For a value that carries its own offset, cast it directly (`value::timestamptz`).
+
+**Sequences.** Inserting rows with their own ids does not move the table's sequence, so the next ordinary insert would take an id already used. After inserting into `observation_sits`, move its sequence past them (the statement below is for an empty table too). The updates do not insert rows and need no sequence change.
+
+**Load the values into staging tables, then restore from them.** Write the `INSERT` lines from the file (they are plain data, and you can read them before you run anything), run the whole script in one transaction in `psql`, and look at the three `SELECT` results before `COMMIT`:
+
+```sql
+BEGIN;
+
+-- 1. observation_sits: one row per entry in tables.observation_sits.rows
+CREATE TEMP TABLE restore_sits (id integer, observation_id integer, sit_note text, sat_at text);
+INSERT INTO restore_sits VALUES (1, 2, 'sat with this', '2026-05-20 08:00:00');
+
+SELECT count(*) AS existing_sits FROM observation_sits;   -- expect 0: the migration does not create any
+
+INSERT INTO observation_sits (id, observation_id, sit_note, sat_at)
+SELECT r.id, r.observation_id, r.sit_note, r.sat_at::timestamp AT TIME ZONE 'UTC'
+FROM restore_sits r
+WHERE EXISTS (SELECT 1 FROM observations o WHERE o.id = r.observation_id)
+ORDER BY r.id;
+
+SELECT r.id AS sit_without_a_home FROM restore_sits r
+WHERE NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = r.observation_id);
+
+SELECT setval(pg_get_serial_sequence('observation_sits', 'id'),
+              COALESCE((SELECT max(id) FROM observation_sits), 1),
+              (SELECT count(*) > 0 FROM observation_sits));
+
+-- 2. observations.last_sat_at: one row per entry in columns.observations.rows
+CREATE TEMP TABLE restore_last_sat (id integer, last_sat_at text);
+INSERT INTO restore_last_sat VALUES (2, '2026-05-20 08:00:00');
+
+UPDATE observations o
+SET last_sat_at = r.last_sat_at::timestamp AT TIME ZONE 'UTC'
+FROM restore_last_sat r
+WHERE o.id = r.id AND o.last_sat_at IS NULL;
+
+SELECT r.id AS observation_without_a_home FROM restore_last_sat r
+WHERE NOT EXISTS (SELECT 1 FROM observations o WHERE o.id = r.id);
+
+-- 3. images: one row per entry in columns.images.rows; a value the source did not have is NULL here and leaves the image as it is
+CREATE TEMP TABLE restore_images (id integer, charge text, view_count integer, last_viewed_at text);
+INSERT INTO restore_images VALUES (1, 'active', 4, '2026-05-01 10:00:00');
+
+SELECT count(*) AS images_with_views_already
+FROM images WHERE view_count <> 0 OR last_viewed_at IS NOT NULL;   -- see the note below
+
+UPDATE images i
+SET charge = COALESCE(r.charge, i.charge),
+    view_count = COALESCE(r.view_count, i.view_count),
+    last_viewed_at = COALESCE(r.last_viewed_at::timestamp AT TIME ZONE 'UTC', i.last_viewed_at)
+FROM restore_images r
+WHERE i.id = r.id;
+
+SELECT r.id AS image_without_a_home FROM restore_images r
+WHERE NOT EXISTS (SELECT 1 FROM images i WHERE i.id = r.id);
+
+-- read the results above; COMMIT only if they are what you expect, otherwise ROLLBACK
+COMMIT;
+```
+
+The `images_with_views_already` count matters: v4's `view_count` and `last_viewed_at` were filled from v3.2's own `access_count` and `last_accessed_at`. A drifted install that kept its counts in other columns usually left those at 0, and then the update loses nothing. If it is not 0, both sets of numbers are real, and which one is right for an image is your decision; the migrator does not make it. Restore the images only where you have decided.
+
+`validate` compares the migrated rows with the source, and restoring changes some of them (`images.view_count`, `images.last_viewed_at`). Keep the validation report you have, which was taken before the restore, as the record of the migration, and expect a `validate` run after the restore to report those columns. Restoring `observation_sits` and `observations.last_sat_at` touches columns v3.2 has no counterpart for. Re-embedding receipts are bound to the image rows as the plan had them, so finish them before you restore.
+
 ### Image rows with the path `pending`
 
 A v3.2 image row keeps where its file is in `images.path`. On a v3.2 deployment that never had R2 enabled the path is the literal `pending`, and no file exists for the row anywhere: it holds the description, the links and the other metadata, and nothing to copy. To count them, run this against the v3.2 database (for D1, `npx wrangler d1 execute <binding-or-name> --remote --command "<the query>"`):
