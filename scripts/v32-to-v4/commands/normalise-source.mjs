@@ -40,7 +40,7 @@ export function parseNormaliseSourceArgs(argv) {
   const values = parseOptions(PHASE, argv, {
     required: ['--source-kind', '--source', '--out', '--set-aside', '--report'],
     optional: ['--restore-sql'],
-    switches: NULL_CHOICES.map(({ flag }) => flag),
+    switches: ['--skip-virtual-tables', ...NULL_CHOICES.map(({ flag }) => flag)],
   });
   if (!['sqlite', 'd1-export'].includes(values['--source-kind'])) throw refuseArgument(PHASE, '--source-kind must be sqlite or d1-export.');
   return {
@@ -50,6 +50,7 @@ export function parseNormaliseSourceArgs(argv) {
     setAsidePath: values['--set-aside'],
     reportPath: values['--report'],
     restoreSqlPath: values['--restore-sql'] ?? null,
+    skipVirtualTables: values['--skip-virtual-tables'] === true,
     nullChoices: NULL_CHOICES.filter(({ flag }) => values[flag] === true),
   };
 }
@@ -72,7 +73,7 @@ function tableNames(database, schema = 'main') {
 
 function columnsOf(database, table, schema = 'main') {
   return database.prepare(`PRAGMA ${schema}.table_xinfo(${sqlLiteral(table)})`).all().filter((column) => column.hidden !== 1)
-    .map((column) => ({ name: column.name, notnull: column.notnull === 1, hasDefault: column.dflt_value !== null, pk: Number(column.pk) }));
+    .map((column) => ({ name: column.name, notnull: column.notnull === 1, hasDefault: column.dflt_value !== null, pk: Number(column.pk), generated: column.hidden === 2 || column.hidden === 3 }));
 }
 
 function plain(value) {
@@ -144,7 +145,7 @@ const CARRY_CODES = new Set(['value-changed-by-copy', 'row-not-found-by-key']);
  *    type or value differs after the copy (SQLite's column affinity turns the text '007' in an INTEGER column into 7)
  *    are unresolved items, and a column that looks like a renamed one is only listed. Every refusal writes the report.
  */
-export function normaliseSource({ sourceKind, source, outPath, setAsidePath, reportPath, restoreSqlPath = null, nullChoices = [], timestamp = new Date().toISOString(), migrationId = 'rmig_normalise_source' } = {}) {
+export function normaliseSource({ sourceKind, source, outPath, setAsidePath, reportPath, restoreSqlPath = null, skipVirtualTables = false, nullChoices = [], timestamp = new Date().toISOString(), migrationId = 'rmig_normalise_source' } = {}) {
   if (!['sqlite', 'd1-export'].includes(sourceKind)) throw refuseArgument(PHASE, '--source-kind must be sqlite or d1-export.');
   const outputs = [['--out', outPath], ['--set-aside', setAsidePath], ['--report', reportPath], ...(restoreSqlPath === null ? [] : [['--restore-sql', restoreSqlPath]])];
   for (const [label, path] of outputs) {
@@ -170,7 +171,13 @@ export function normaliseSource({ sourceKind, source, outPath, setAsidePath, rep
     for (const ddl of exactV32Ddl()) database.exec(ddl);
     database.exec(`ATTACH DATABASE ${sqlLiteral(copyPath)} AS src`);
     const v32Tables = tableNames(database);
-    const sourceTables = tableNames(database, 'src');
+    // What the fingerprint cannot see is reported, not refused: it does not affect the data that is copied or set aside, and
+    // the copy is built from the public DDL (so inspect-source, which stays strict, finds it clean). Three things are not
+    // reported only: a generated column (derived: set aside, marked, never carried), a virtual table (contents are neither
+    // carried nor set aside: refused unless --skip-virtual-tables) and DDL the scan cannot read (refused).
+    const guard = sourceGuardFindings(database, { schema: 'src' });
+    const virtualTables = new Set(guard.filter((finding) => finding.kind === 'virtual-table').map((finding) => finding.table));
+    const sourceTables = tableNames(database, 'src').filter((name) => !virtualTables.has(name));
     report = {
       source_kind: sourceKind,
       source_sha256: sha256File(sourceFile),
@@ -181,6 +188,8 @@ export function normaliseSource({ sourceKind, source, outPath, setAsidePath, rep
       possible_renames: [],
       resolved: [],
       unresolved: [],
+      source_features: guard.filter((finding) => !['virtual-table', 'unreadable-sql'].includes(finding.kind) && !(finding.kind === 'generated-or-hidden-column')),
+      virtual_tables: [...virtualTables].sort().map((table) => ({ table, skipped: skipVirtualTables })),
       ignored_source_objects: database.prepare("SELECT type, name FROM src.sqlite_master WHERE type IN ('view', 'trigger') ORDER BY type, name").all().map(({ type, name }) => ({ type, name })),
     };
     setAside = { format: SET_ASIDE_FORMAT, source_kind: sourceKind, source_sha256: report.source_sha256, columns: {}, tables: {} };
@@ -194,9 +203,9 @@ export function normaliseSource({ sourceKind, source, outPath, setAsidePath, rep
     }
 
     function build() {
-      // What the catalog fingerprint cannot see: a CHECK, a collation, a generated column, WITHOUT ROWID, STRICT, a partial or expression index.
-      for (const finding of sourceGuardFindings(database, { schema: 'src' })) report.unresolved.push({ type: 'source-guard', ...finding });
-      if (report.unresolved.length > 0) return finish({ refusal: { code: 'RMIG-E-NORMALISE-UNRESOLVED', summary: 'The source has a schema feature the v3.2 fingerprint cannot see (CHECK, collation, generated column, ...); nothing was built.' } });
+      for (const finding of guard.filter((item) => item.kind === 'unreadable-sql')) report.unresolved.push({ type: 'source-guard', ...finding });
+      if (!skipVirtualTables) for (const table of [...virtualTables].sort()) report.unresolved.push({ type: 'virtual-table', table, choice_flag: '--skip-virtual-tables' });
+      if (report.unresolved.length > 0) return finish({ refusal: { code: 'RMIG-E-NORMALISE-UNRESOLVED', summary: 'The source has a virtual table, or SQL that could not be read with confidence; nothing was built.' } });
 
       // A v3.2 table the source does not have cannot be told apart from an empty one: refuse, never leave it empty silently.
       for (const table of report.tables_missing_from_source) report.unresolved.push({ type: 'table-missing-from-source', table });
@@ -218,12 +227,13 @@ export function normaliseSource({ sourceKind, source, outPath, setAsidePath, rep
         const sourceColumns = columnsOf(database, table, 'src');
         const sourceNames = new Set(sourceColumns.map((column) => column.name));
         const v32Names = new Set(v32Columns.map((column) => column.name));
-        const shared = v32Columns.filter((column) => sourceNames.has(column.name));
-        const v32Only = v32Columns.filter((column) => !sourceNames.has(column.name));
-        const extras = sourceColumns.filter((column) => !v32Names.has(column.name));
+        const derived = new Set(sourceColumns.filter((column) => column.generated).map((column) => column.name));
+        const shared = v32Columns.filter((column) => sourceNames.has(column.name) && !derived.has(column.name));
+        const v32Only = v32Columns.filter((column) => !sourceNames.has(column.name) || derived.has(column.name));
+        const extras = sourceColumns.filter((column) => !v32Names.has(column.name) || column.generated);
         const pk = v32Columns.filter((column) => column.pk > 0).sort((a, b) => a.pk - b.pk).map((column) => column.name);
         const sourceRows = Number(database.prepare(`SELECT count(*) AS n FROM src.${quote(table)}`).get().n);
-        const entry = { source_rows: sourceRows, shared_columns: shared.length, v32_only_columns: v32Only.map((column) => column.name), set_aside_columns: extras.map((column) => column.name), set_aside_column_rows: 0 };
+        const entry = { source_rows: sourceRows, shared_columns: shared.length, v32_only_columns: v32Only.map((column) => column.name), set_aside_columns: extras.map((column) => column.name), set_aside_column_rows: 0, ...(derived.size > 0 ? { generated_columns: [...derived].sort() } : {}) };
         report.tables[table] = entry;
         if (v32Only.length > 0 && extras.length > 0) {
           report.possible_renames.push({ table, v32_columns_not_in_source: entry.v32_only_columns, source_columns_not_in_v32: entry.set_aside_columns, note: 'Not applied: a rename is never guessed. The source values are in the set-aside file; the v3.2 columns took their defaults.' });
@@ -271,11 +281,12 @@ export function normaliseSource({ sourceKind, source, outPath, setAsidePath, rep
       // Columns v3.2 does not have: the non-null values, by the table's primary key. (Read now, from the copy.)
       for (const { table, extras, pk } of plans) {
         if (extras.length === 0) continue;
+        const columnInfo = Object.fromEntries(extras.filter((column) => column.generated).map((column) => [column.name, { generated: true }]));
         const keyColumns = pk.length > 0 ? pk : ['rowid'];
         const rows = readRows(database, `SELECT ${keyColumns.map((name) => (name === 'rowid' ? 'rowid AS rowid' : quote(name))).join(', ')}, ${extras.map((column) => quote(column.name)).join(', ')} FROM src.${quote(table)} ORDER BY ${keyOf(pk)}`)
           .map((row) => ({ key: Object.fromEntries(keyColumns.map((name) => [name, row[name]])), values: Object.fromEntries(extras.map((column) => [column.name, row[column.name]]).filter(([, value]) => value !== null)) }))
           .filter((row) => Object.keys(row.values).length > 0);
-        setAside.columns[table] = { key: keyColumns, columns: extras.map((column) => column.name), rows };
+        setAside.columns[table] = { key: keyColumns, columns: extras.map((column) => column.name), ...(Object.keys(columnInfo).length > 0 ? { column_info: columnInfo } : {}), rows };
         report.tables[table].set_aside_column_rows = rows.length;
       }
 
@@ -317,13 +328,13 @@ export function normaliseSource({ sourceKind, source, outPath, setAsidePath, rep
           if (changed > 0) failures.push({ type: 'value-changed-by-copy', table, column: null, rows: changed, note: 'the table has no primary key, so rows are counted, not named' });
           continue;
         }
-        const on = pk.map((name) => `s.${quote(name)} IS m.${quote(name)}`).join(' AND ');
+        const on = pk.map((name) => `(s.${quote(name)} COLLATE BINARY) IS (m.${quote(name)} COLLATE BINARY)`).join(' AND ');
         const keyColumns = pk.map((name, position) => `s.${quote(name)} AS k${position}`).join(', ');
         const keyOfRow = (row) => (pk.length === 1 ? row.k0 : JSON.stringify(Object.fromEntries(pk.map((name, position) => [name, row[`k${position}`]]))));
         const orphans = readRows(database, `SELECT ${keyColumns} FROM src.${quote(table)} s WHERE NOT EXISTS (SELECT 1 FROM main.${quote(table)} m WHERE ${on}) ORDER BY ${pk.map((name) => `s.${quote(name)}`).join(', ')}`);
         if (orphans.length > 0) failures.push({ type: 'row-not-found-by-key', table, ...limited(orphans.map(keyOfRow)) });
         for (const column of shared) {
-          const cell = `(typeof(s.${quote(column)}) <> typeof(m.${quote(column)}) OR s.${quote(column)} IS NOT m.${quote(column)})`;
+          const cell = `(typeof(s.${quote(column)}) <> typeof(m.${quote(column)}) OR (s.${quote(column)} COLLATE BINARY) IS NOT (m.${quote(column)} COLLATE BINARY))`;
           const guard = defaulted.has(column) ? ` AND s.${quote(column)} IS NOT NULL` : '';
           const rows = readRows(database, `SELECT ${keyColumns}, typeof(s.${quote(column)}) AS st, typeof(m.${quote(column)}) AS mt FROM src.${quote(table)} s JOIN main.${quote(table)} m ON ${on} WHERE ${cell}${guard} ORDER BY ${pk.map((name) => `s.${quote(name)}`).join(', ')}`);
           const byTypes = new Map();

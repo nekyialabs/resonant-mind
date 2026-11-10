@@ -89,22 +89,65 @@ describe('normalise-source never reports success while data changed or went miss
     expect(reportOf(paths).ignored_source_objects).toEqual([{ type: 'view', name: 'subconscious' }]);
   });
 
-  it.each([
-    ['a CHECK constraint', 'CREATE TABLE extra_checked (a INTEGER CHECK (a > 0));', 'check-constraint'],
-    ['a COLLATE NOCASE column', 'CREATE TABLE extra_collated (a TEXT COLLATE NOCASE);', 'collation'],
-    ['a generated column', 'ALTER TABLE journals ADD COLUMN shout TEXT GENERATED ALWAYS AS (upper(content)) VIRTUAL;', 'generated-or-hidden-column'],
-    ['WITHOUT ROWID', 'CREATE TABLE extra_wr (a INTEGER PRIMARY KEY) WITHOUT ROWID;', 'without-rowid'],
-    ['STRICT', 'CREATE TABLE extra_strict (a INTEGER) STRICT;', 'strict'],
-    ['a partial index', "CREATE INDEX extra_partial ON journals(content) WHERE content <> '';", 'partial-index'],
-    ['an expression index', 'CREATE INDEX extra_expression ON journals(lower(content));', 'expression-index'],
-  ])('refuses a source with %s, in any table', (_label, extra, kind) => {
-    const source = buildDrifted(file(`guard-${kind}.sqlite`), extra);
+  // The guard's job is the exactness of what is migrated from: inspect-source stays strict (source-guard.test.mjs), and the
+  // normalised copy is built from the public DDL. Here the features of the source are reported, not refused.
+  it('reports a CHECK on an extra table and a partial index on a shared table without refusing, and the output passes inspect-source', () => {
+    const source = buildDrifted(file('features.sqlite'), "CREATE TABLE extra_checked (a INTEGER CHECK (a > 0), b TEXT COLLATE NOCASE); INSERT INTO extra_checked VALUES (1, 'B'); CREATE INDEX extra_partial ON journals(content) WHERE content <> ''; CREATE INDEX extra_expression ON journals(lower(content));");
     const paths = fresh();
-    const refused = normalise('sqlite', source, paths, FLAG);
+    const run = normalise('sqlite', source, paths, FLAG);
+    expect(run.status, run.output).toBe(0);
+    const details = reportOf(paths);
+    expect(details.unresolved).toEqual([]);
+    const features = details.source_features.map((item) => `${item.table}:${item.kind}`).sort();
+    expect(features).toEqual(expect.arrayContaining(['extra_checked:check-constraint', 'extra_checked:collation', 'journals:partial-index', 'journals:expression-index']));
+    // the extra table is set aside whole, with its own DDL
+    expect(JSON.parse(readFileSync(paths.setAside, 'utf8')).tables.extra_checked.rows).toEqual([{ a: 1, b: 'B' }]);
+    const inspected = runCli(['inspect-source', '--source-kind', 'sqlite', '--source', paths.out, '--report', file(`features-inspect-${counter}.json`)]);
+    expect(inspected.status, inspected.output).toBe(0);
+  });
+
+  it('compares carried values byte for byte even when the source column has a collation', () => {
+    const source = buildDrifted(file('nocase.sqlite'), "DROP TABLE journals; CREATE TABLE journals (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_date TEXT, content TEXT COLLATE NOCASE NOT NULL, tags TEXT, emotion TEXT, created_at TEXT); INSERT INTO journals (content) VALUES ('MiXed Case');");
+    const paths = fresh();
+    expect(normalise('sqlite', source, paths, FLAG).status).toBe(0);
+    const out = new DatabaseSync(paths.out, { readOnly: true });
+    try { expect(out.prepare('SELECT content FROM journals').get().content).toBe('MiXed Case'); } finally { out.close(); }
+  });
+
+  it('sets a generated column aside with a generated marker and never carries it', () => {
+    const source = buildDrifted(file('generated.sqlite'), "INSERT INTO journals (id, entry_date, content) VALUES (7, '2026-02-01', 'quiet'); ALTER TABLE journals ADD COLUMN shout TEXT GENERATED ALWAYS AS (upper(content)) VIRTUAL;");
+    const paths = fresh();
+    const run = normalise('sqlite', source, paths, FLAG);
+    expect(run.status, run.output).toBe(0);
+    const details = reportOf(paths);
+    expect(details.tables.journals.generated_columns).toEqual(['shout']);
+    expect(details.tables.journals.set_aside_columns).toContain('shout');
+    const setAside = JSON.parse(readFileSync(paths.setAside, 'utf8')).columns.journals;
+    expect(setAside.column_info).toEqual({ shout: { generated: true } });
+    expect(setAside.rows).toContainEqual({ key: { id: 7 }, values: { shout: 'QUIET' } });
+    const out = new DatabaseSync(paths.out, { readOnly: true });
+    try { expect(out.prepare("SELECT count(*) AS n FROM pragma_table_xinfo('journals') WHERE name = 'shout'").get().n).toBe(0); } finally { out.close(); }
+  });
+
+  it('refuses a virtual table unless --skip-virtual-tables is given, lists it either way, and sets its shadow tables aside', () => {
+    const probe = new DatabaseSync(':memory:');
+    let fts = true;
+    try { probe.exec('CREATE VIRTUAL TABLE probe USING fts5(body)'); } catch { fts = false; } finally { probe.close(); }
+    if (!fts) return;
+    const source = buildDrifted(file('virtual.sqlite'), "CREATE VIRTUAL TABLE notes_fts USING fts5(body); INSERT INTO notes_fts (body) VALUES ('searchable words');");
+    const refusedPaths = fresh();
+    const refused = normalise('sqlite', source, refusedPaths, FLAG);
     expect(refused.status, refused.output).toBe(2);
-    expect(JSON.parse(refused.stdout)).toMatchObject({ code: 'RMIG-E-NORMALISE-UNRESOLVED' });
-    expect(reportOf(paths).unresolved.map((item) => `${item.type}:${item.kind}`)).toContain(`source-guard:${kind}`);
-    expect(existsSync(paths.out)).toBe(false);
+    expect(reportOf(refusedPaths).unresolved).toEqual([{ type: 'virtual-table', table: 'notes_fts', choice_flag: '--skip-virtual-tables' }]);
+    expect(reportOf(refusedPaths).virtual_tables).toEqual([{ table: 'notes_fts', skipped: false }]);
+    expect(existsSync(refusedPaths.out)).toBe(false);
+    const paths = fresh();
+    const run = normalise('sqlite', source, paths, [...FLAG, '--skip-virtual-tables']);
+    expect(run.status, run.output).toBe(0);
+    expect(reportOf(paths).virtual_tables).toEqual([{ table: 'notes_fts', skipped: true }]);
+    const setAside = JSON.parse(readFileSync(paths.setAside, 'utf8'));
+    expect(Object.keys(setAside.tables)).not.toContain('notes_fts');
+    expect(Object.keys(setAside.tables)).toContain('notes_fts_data');
   });
 });
 
