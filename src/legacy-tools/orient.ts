@@ -6,7 +6,7 @@
 
 import type { Env } from "../types";
 import { getCurrentWeather } from "../shared/weather-api";
-import { getTimeOfDayContext, getRelativeTime } from "../shared/time";
+import { getTimeOfDayContext, getRelativeTime, nightDateFor, shiftDate } from "../shared/time";
 import { getSubconsciousState, updateSurfaceTracking } from "../daemon/state";
 import type { DrivesGauge } from "../daemon/drives";
 import { ENV_STALE_MINUTES } from "../shared/constants";
@@ -97,9 +97,9 @@ export async function handleMindOrient(env: Env): Promise<string> {
     env.DB.prepare(`
       SELECT content, dream_date, recurring_dream_id, recurrence_count
       FROM dreams
-      WHERE dream_date >= to_char(CURRENT_DATE - INTERVAL '1 day', 'YYYY-MM-DD')
+      WHERE dream_date >= ?
       ORDER BY created_at DESC LIMIT 1
-    `).first().catch(() => null),
+    `).bind(shiftDate(nightDateFor(new Date(), env.LOCATION_TIMEZONE), -1)).first().catch(() => null),
     pickOrphansForOrient(env, 2),
   ]);
 

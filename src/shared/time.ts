@@ -48,6 +48,32 @@ const NIGHT_END_HOUR = 5;
  * their own local day. An invalid zone falls back to UTC.
  */
 export function nightDateFor(now: Date = new Date(), timeZone = "UTC"): string {
+  const { date, hour } = localDateAndHour(now, timeZone);
+  return hour < NIGHT_END_HOUR ? shiftDate(date, -1) : date;
+}
+
+/** The night starts at 22:00 local. */
+const NIGHT_START_HOUR = 22;
+
+/**
+ * The date a dream made at this moment is stored under. In the night
+ * (22:00 to 05:00 local) it is the night date. A dream forced outside the
+ * night (05:00 to 21:59 local) is keyed to the previous night, so it does not
+ * count as that evening's dream and block the real one.
+ */
+export function dreamDateFor(now: Date = new Date(), timeZone = "UTC"): string {
+  const { date, hour } = localDateAndHour(now, timeZone);
+  return hour < NIGHT_START_HOUR ? shiftDate(date, -1) : date;
+}
+
+/** A YYYY-MM-DD calendar date moved by a whole number of days. */
+export function shiftDate(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function localDateAndHour(now: Date, timeZone: string): { date: string; hour: number } {
   let parts: Intl.DateTimeFormatPart[];
   try {
     parts = new Intl.DateTimeFormat("en-GB", {
@@ -59,12 +85,10 @@ export function nightDateFor(now: Date = new Date(), timeZone = "UTC"): string {
       hourCycle: "h23",
     }).formatToParts(now);
   } catch {
-    return nightDateFor(now, "UTC");
+    return localDateAndHour(now, "UTC");
   }
-  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
-  const local = new Date(Date.UTC(get("year"), get("month") - 1, get("day")));
-  if (get("hour") < NIGHT_END_HOUR) local.setUTCDate(local.getUTCDate() - 1);
-  return local.toISOString().slice(0, 10);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return { date: `${get("year")}-${get("month")}-${get("day")}`, hour: Number(get("hour")) };
 }
 
 export function getRelativeTime(date: Date): string {

@@ -25,7 +25,7 @@
  */
 
 import type { Env } from "../types";
-import { getTimeOfDayContext, nightDateFor } from "../shared/time";
+import { getTimeOfDayContext, dreamDateFor } from "../shared/time";
 import { getEmbedding, searchVectors } from "../shared/mind-helpers";
 import { getSubconsciousState } from "./state";
 import { composeManifestDream, type DreamMaterial } from "./dream-compose";
@@ -58,11 +58,23 @@ export async function processDream(
   // date gate — the sweep must run even on nights we already dreamed.
   await sweepUnvectorizedDreams(env);
 
-  // Check if we already dreamed tonight
-  const tonight = nightDateFor(new Date(), env.LOCATION_TIMEZONE);
-  const existing = await env.DB.prepare(
+  // Check if we already dreamed tonight. The key is the night date in
+  // LOCATION_TIMEZONE; a forced dream outside the night is keyed to the
+  // previous night (see dreamDateFor) so it never blocks tonight's dream.
+  const now = new Date();
+  const tonight = dreamDateFor(now, env.LOCATION_TIMEZONE);
+  let existing = await env.DB.prepare(
     'SELECT id FROM dreams WHERE dream_date = ?'
   ).bind(tonight).first();
+  // Transition for one release: rows written before the local-night key were
+  // keyed by the UTC date. Count such a row as tonight's dream too. Remove
+  // this lookup after the next release.
+  const legacyUtcKey = now.toISOString().slice(0, 10);
+  if (!existing && legacyUtcKey !== tonight) {
+    existing = await env.DB.prepare(
+      'SELECT id FROM dreams WHERE dream_date = ?'
+    ).bind(legacyUtcKey).first();
+  }
   if (existing) {
     if (!regenerate) {
       return { generated: false, reason: `already dreamed tonight (dream #${existing.id})` };
