@@ -25,7 +25,7 @@
  */
 
 import type { Env } from "../types";
-import { getTimeOfDayContext, dreamDateFor } from "../shared/time";
+import { getTimeOfDayContext, nightDateFor } from "../shared/time";
 import { getEmbedding, searchVectors } from "../shared/mind-helpers";
 import { getSubconsciousState } from "./state";
 import { composeManifestDream, type DreamMaterial } from "./dream-compose";
@@ -59,10 +59,11 @@ export async function processDream(
   await sweepUnvectorizedDreams(env);
 
   // Check if we already dreamed tonight. The key is the night date in
-  // LOCATION_TIMEZONE; a forced dream outside the night is keyed to the
-  // previous night (see dreamDateFor) so it never blocks tonight's dream.
+  // LOCATION_TIMEZONE (nightDateFor). A forced dream outside the 22:00-05:00
+  // window is keyed to that day like any other, so it counts as that
+  // evening's dream; this is the existing behaviour, unchanged.
   const now = new Date();
-  const tonight = dreamDateFor(now, env.LOCATION_TIMEZONE);
+  const tonight = nightDateFor(now, env.LOCATION_TIMEZONE);
   let existing = await env.DB.prepare(
     'SELECT id FROM dreams WHERE dream_date = ?'
   ).bind(tonight).first();

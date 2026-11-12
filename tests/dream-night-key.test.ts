@@ -58,10 +58,10 @@ describe('dream "already tonight" key', () => {
     expect(lookups[0]).toBe('2026-07-14');
   });
 
-  it('keys a forced daytime dream to the previous night', async () => {
-    const { env, lookups } = dreamEnv('UTC', { '2026-07-14': 7 });
+  it('keys a forced daytime dream to that day, as before', async () => {
+    const { env, lookups } = dreamEnv('UTC', { '2026-07-15': 7 });
     const out = await run('2026-07-15T15:00:00Z', env);
-    expect(lookups[0]).toBe('2026-07-14');
+    expect(lookups).toEqual(['2026-07-15']);
     expect(out.reason).toBe('already dreamed tonight (dream #7)');
   });
 });
