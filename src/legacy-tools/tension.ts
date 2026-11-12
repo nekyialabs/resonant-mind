@@ -10,7 +10,47 @@
  */
 
 import type { Env } from "../types";
-import { generateId } from "../shared/text";
+import { generateId, escapeLike } from "../shared/text";
+
+const SIT_RESOLVE_MIN_PREFIX = 10;
+const DELETE_MIN_PREFIX = 20;
+const MAX_PREFIX_MATCHES = 20;
+
+type TensionRow = Record<string, unknown>;
+
+/**
+ * Resolve a tension from an exact id or a unique id prefix. The prefix is
+ * matched literally (LIKE wildcards in the input are escaped), must be at
+ * least `minPrefix` characters, and must match exactly one tension.
+ */
+async function resolveTension(
+  env: Env,
+  rawId: unknown,
+  minPrefix: number,
+  columns: string,
+): Promise<{ tension: TensionRow } | { error: string }> {
+  if (typeof rawId !== "string" || !rawId.trim()) return { error: "tension_id must be a non-empty string" };
+  const id = rawId.trim();
+
+  const exact = await env.DB.prepare(`SELECT ${columns} FROM tensions WHERE id = ?`).bind(id).first();
+  if (exact) return { tension: exact };
+
+  if (id.length < minPrefix) {
+    return { error: `Tension '${id}' not found. A partial id needs at least ${minPrefix} characters; use the full id shown by action='list'.` };
+  }
+
+  const matches = await env.DB.prepare(
+    `SELECT ${columns} FROM tensions WHERE id LIKE ? ESCAPE '\\' ORDER BY id LIMIT ${MAX_PREFIX_MATCHES + 1}`
+  ).bind(`${escapeLike(id)}%`).all();
+  const rows = matches.results ?? [];
+
+  if (rows.length === 0) return { error: `Tension '${id}' not found` };
+  if (rows.length > 1) {
+    const count = rows.length > MAX_PREFIX_MATCHES ? `more than ${MAX_PREFIX_MATCHES}` : String(rows.length);
+    return { error: `Tension id prefix '${id}' matches ${count} tensions. Use a longer prefix or the full id.` };
+  }
+  return { tension: rows[0] };
+}
 
 export async function handleMindTension(env: Env, params: Record<string, unknown>): Promise<string> {
   const action = params.action as string;
@@ -39,7 +79,7 @@ export async function handleMindTension(env: Env, params: Record<string, unknown
           const days = Math.floor((now.getTime() - created.getTime()) / (24 * 60 * 60 * 1000));
 
           output.push("");
-          output.push(`[${String(t.id).slice(0, 12)}...] (${days}d)`);
+          output.push(`[${String(t.id)}] (${days}d)`);
           output.push(`   A: ${String(t.pole_a).slice(0, 60)}`);
           output.push(`   B: ${String(t.pole_b).slice(0, 60)}`);
           if (t.context) output.push(`   Why: ${String(t.context).slice(0, 50)}`);
@@ -88,13 +128,9 @@ export async function handleMindTension(env: Env, params: Record<string, unknown
         return JSON.stringify({ error: "tension_id required for action='sit'" });
       }
 
-      const tension = await env.DB.prepare(
-        `SELECT * FROM tensions WHERE id LIKE ? OR id = ?`
-      ).bind(`${tensionId}%`, tensionId).first();
-
-      if (!tension) {
-        return JSON.stringify({ error: `Tension '${tensionId}' not found` });
-      }
+      const found = await resolveTension(env, tensionId, SIT_RESOLVE_MIN_PREFIX, "*");
+      if ("error" in found) return JSON.stringify({ error: found.error });
+      const tension = found.tension;
 
       await env.DB.prepare(
         `UPDATE tensions SET visits = visits + 1, last_visited = datetime('now') WHERE id = ?`
@@ -119,13 +155,9 @@ export async function handleMindTension(env: Env, params: Record<string, unknown
         return JSON.stringify({ error: "tension_id required for action='resolve'" });
       }
 
-      const tension = await env.DB.prepare(
-        `SELECT * FROM tensions WHERE id LIKE ? OR id = ?`
-      ).bind(`${tensionId}%`, tensionId).first();
-
-      if (!tension) {
-        return JSON.stringify({ error: `Tension '${tensionId}' not found` });
-      }
+      const found = await resolveTension(env, tensionId, SIT_RESOLVE_MIN_PREFIX, "*");
+      if ("error" in found) return JSON.stringify({ error: found.error });
+      const tension = found.tension;
 
       await env.DB.prepare(
         `UPDATE tensions SET resolved_at = datetime('now'), resolution = ? WHERE id = ?`
@@ -142,9 +174,10 @@ export async function handleMindTension(env: Env, params: Record<string, unknown
     if (action === "delete") {
       const tensionId = params.tension_id as string;
       if (!tensionId) return JSON.stringify({ error: "tension_id required for action='delete'" });
-      const tension = await env.DB.prepare(`SELECT pole_a, pole_b FROM tensions WHERE id LIKE ? OR id = ?`).bind(`${tensionId}%`, tensionId).first();
-      if (!tension) return JSON.stringify({ error: `Tension '${tensionId}' not found` });
-      await env.DB.prepare(`DELETE FROM tensions WHERE id LIKE ? OR id = ?`).bind(`${tensionId}%`, tensionId).run();
+      const found = await resolveTension(env, tensionId, DELETE_MIN_PREFIX, "id, pole_a, pole_b");
+      if ("error" in found) return JSON.stringify({ error: found.error });
+      const tension = found.tension;
+      await env.DB.prepare(`DELETE FROM tensions WHERE id = ?`).bind(tension.id as string).run();
       return JSON.stringify({ success: true, message: `Deleted tension: ${tension.pole_a} <-> ${tension.pole_b}` });
     }
 
