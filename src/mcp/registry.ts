@@ -596,8 +596,8 @@ export const TOOLS: MCPToolDefinition[] = [
         context: { type: "string", description: "Context for entity lookup" },
         salience: {
           type: "string",
-          enum: ["foundational", "active", "high", "background", "medium", "heavy"],
-          description: "New salience level (for set_salience). Gate K: synced to the salience CHECK convention — 'archive' removed (never DB-valid; use action 'archive_old' to archive)."
+          enum: ["foundational", "active", "background", "archive"],
+          description: "New salience level (for set_salience). Matches what the handler accepts and stores for an entity."
         },
         new_name: { type: "string", description: "New name (for edit)" },
         new_type: { type: "string", description: "New entity type (for edit)" },

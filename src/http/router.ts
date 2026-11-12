@@ -166,6 +166,14 @@ async function handleImageUpload(request: Request, env: Env): Promise<Response> 
     if (!file) return jsonResponse({ error: "No file provided. Use -F 'file=@/path/to/image'" }, 400);
     if (!description) return jsonResponse({ error: "description is required" }, 400);
     if (file.size > MAX_IMAGE_BYTES) return jsonResponse({ error: "File too large. Max 10MB." }, 413);
+    // observation_id is optional; when present it must be a plain positive integer.
+    let linkedObservationId: number | null = null;
+    if (observationId) {
+      if (!/^[0-9]+$/.test(observationId) || !Number.isSafeInteger(Number(observationId)) || Number(observationId) < 1) {
+        return jsonResponse({ error: "observation_id must be a positive integer" }, 400);
+      }
+      linkedObservationId = Number(observationId);
+    }
 
     const rawBytes = new Uint8Array(await file.arrayBuffer());
     if (rawBytes.byteLength > MAX_IMAGE_BYTES) {
@@ -204,7 +212,7 @@ async function handleImageUpload(request: Request, env: Env): Promise<Response> 
     const result = await env.DB.prepare(`
       INSERT INTO images (path, description, context, emotion, weight, entity_id, observation_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(storedPath, description, context || null, emotion || null, weight, entityId, observationId ? parseInt(observationId) : null).run();
+    `).bind(storedPath, description, context || null, emotion || null, weight, entityId, linkedObservationId).run();
 
     const imageId = result.meta.last_row_id;
     databaseCommitted = true;

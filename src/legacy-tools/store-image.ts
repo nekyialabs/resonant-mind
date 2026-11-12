@@ -9,6 +9,7 @@ import { getImageEmbedding } from "../embeddings";
 import { normalizeText } from "../shared/text";
 import { R2_IMAGE_PATH_PREFIX } from "../shared/constants";
 import { decodeBase64Image, fetchRemoteImage, validateImageBytes } from "../shared/image-security";
+import { clampLimit } from "../shared/limits";
 
 export async function handleMindStoreImage(env: Env, params: Record<string, unknown>): Promise<string> {
   const action = params.action as string;
@@ -141,7 +142,7 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
     const emotion = params.emotion as string;
     const weight = params.weight as string;
     const random = params.random as boolean;
-    const limit = (params.limit as number) || 5;
+    const limit = clampLimit(params.limit, 5);
 
     let query = `SELECT i.*, e.name as entity_name, e.entity_type FROM images i LEFT JOIN entities e ON i.entity_id = e.id WHERE 1=1`;
     const bindings: unknown[] = [];
@@ -183,7 +184,7 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
   // === SEARCH: Semantic image search via pgvector ===
   if (action === "search") {
     const query = params.query as string;
-    const limit = (params.limit as number) || 5;
+    const limit = clampLimit(params.limit, 5);
     if (!query) return "Error: query is required for image search.";
 
     const embedding = await getEmbedding(env, query);

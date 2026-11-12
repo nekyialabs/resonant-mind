@@ -10,11 +10,12 @@
  */
 
 import type { Env } from "../types";
+import { clampLimit } from "../shared/limits";
 
 export async function handleMindListEntities(env: Env, params: Record<string, unknown>): Promise<string> {
   const entityType = params.entity_type as string;
   const context = params.context as string;
-  const limit = (params.limit as number) || 50;
+  const limit = clampLimit(params.limit, 50);
 
   // If context is specified, find entities that have observations in that context
   if (context) {

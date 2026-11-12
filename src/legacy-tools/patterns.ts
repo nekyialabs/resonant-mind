@@ -5,9 +5,10 @@
 
 import type { Env } from "../types";
 import { getSubconsciousState } from "../daemon/state";
+import { clampLimit } from "../shared/limits";
 
 export async function handleMindPatterns(env: Env, params: Record<string, unknown>): Promise<string> {
-  const days = (params.days as number) || 7;
+  const days = clampLimit(params.days, 7);
   const includeAllTime = (params.include_all_time as boolean) !== false;
 
   try {

@@ -134,13 +134,18 @@ export async function handleMindEntity(env: Env, params: Record<string, unknown>
     }
 
     case "archive_old": {
-      const olderThanDays = (params.older_than_days as number) || 30;
+      const rawDays = params.older_than_days;
+      const olderThanDays = rawDays === undefined || rawDays === null ? 30 : rawDays;
+      if (typeof olderThanDays !== "number" || !Number.isInteger(olderThanDays) || olderThanDays < 1) {
+        return "older_than_days must be a whole number of days, 1 or more";
+      }
       const typeFilter = params.entity_type_filter as string;
 
       const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
 
       let query = `UPDATE entities SET salience = 'archive', updated_at = datetime('now')
                    WHERE salience != 'foundational' AND salience != 'archive'
+                   AND entity_type != 'self'
                    AND updated_at < ?`;
       const bindings: unknown[] = [cutoff];
 

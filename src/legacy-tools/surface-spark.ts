@@ -5,9 +5,10 @@
 
 import type { Env } from "../types";
 import { getSubconsciousState } from "../daemon/state";
+import { clampLimit } from "../shared/limits";
 
 export async function handleMindSurfaceSpark(env: Env, params: Record<string, unknown>): Promise<string> {
-  const count = (params.limit as number) || 5;
+  const count = clampLimit(params.limit, 5);
   const context = params.context as string;
   const weightBias = params.weight_bias as string;
 
