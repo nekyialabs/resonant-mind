@@ -7,12 +7,13 @@ import type { Env } from "../types";
 import { searchVectors } from "../shared/mind-helpers";
 import { recordAccessTracking } from "../daemon/state";
 import { dict } from "../shared/dict";
+import { clampLimit } from "../shared/limits";
 
 export async function handleMindTimeline(env: Env, params: Record<string, unknown>): Promise<string> {
   const query = params.query as string;
   const startDate = params.start_date as string;
   const endDate = params.end_date as string;
-  const nResults = (params.n_results as number) || 50;
+  const nResults = clampLimit(params.n_results, 50);
 
   try {
     const vectorResults = await searchVectors(env, query, nResults * 2);

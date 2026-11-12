@@ -15,6 +15,7 @@
 
 import type { Env } from "../types";
 import { dict } from "../shared/dict";
+import { clampLimit } from "../shared/limits";
 
 interface EntityRow {
   id: number;
@@ -33,7 +34,7 @@ function previewObs(s: string | null | undefined, n = 160): string {
 
 export async function handleMindGraph(env: Env, params: Record<string, unknown>): Promise<string> {
   const view = ((params.view as string | undefined) ?? "sparse").toLowerCase();
-  const limit = Math.min(Number(params.limit) || 25, 200);
+  const limit = clampLimit(params.limit, 25, 200);
 
   if (view === "connections") {
     const name = (params.name as string | undefined)?.trim();
