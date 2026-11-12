@@ -30,6 +30,7 @@
  */
 
 import type { Env } from "../types";
+import { dict } from "../shared/dict";
 
 interface CompassRow {
   id: number;
@@ -123,7 +124,7 @@ export async function handleCompassRead(env: Env, params: Record<string, unknown
   }
 
   // Group by kind
-  const byKind: Record<string, CompassRow[]> = {};
+  const byKind: Record<string, CompassRow[]> = dict<CompassRow[]>();
   for (const row of rows) {
     if (!byKind[row.kind]) byKind[row.kind] = [];
     byKind[row.kind].push(row);

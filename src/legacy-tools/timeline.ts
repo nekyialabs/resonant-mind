@@ -6,6 +6,7 @@
 import type { Env } from "../types";
 import { searchVectors } from "../shared/mind-helpers";
 import { recordAccessTracking } from "../daemon/state";
+import { dict } from "../shared/dict";
 
 export async function handleMindTimeline(env: Env, params: Record<string, unknown>): Promise<string> {
   const query = params.query as string;
@@ -67,7 +68,7 @@ export async function handleMindTimeline(env: Env, params: Record<string, unknow
 
     dated.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-    const byMonth: Record<string, any[]> = {};
+    const byMonth: Record<string, any[]> = dict<any[]>();
     for (const item of dated) {
       const monthKey = item.timestamp.toISOString().substring(0, 7);
       if (!byMonth[monthKey]) byMonth[monthKey] = [];

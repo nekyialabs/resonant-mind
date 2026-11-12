@@ -14,6 +14,7 @@
  */
 
 import type { Env } from "../types";
+import { dict } from "../shared/dict";
 
 interface EntityRow {
   id: number;
@@ -57,7 +58,7 @@ export async function handleMindGraph(env: Env, params: Record<string, unknown>)
     if (!rows.length) return `${ent.name} (${ent.entity_type}) has 0 relations. Disconnected.`;
 
     let out = `=== GRAPH: ${ent.name} (${ent.entity_type}) — ${rows.length} relations ===\n\n`;
-    const byType: Record<string, string[]> = {};
+    const byType: Record<string, string[]> = dict<string[]>();
     for (const r of rows) {
       const t = r.relation_type as string;
       const dir = r.direction === 'out' ? '→' : '←';

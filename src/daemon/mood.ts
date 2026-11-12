@@ -11,6 +11,7 @@
  */
 
 import type { Env } from "../types";
+import { dict } from "../shared/dict";
 
 export interface MoodResult {
   dominantEmotion: string;
@@ -27,7 +28,7 @@ export async function computeMood(
   now: Date
 ): Promise<MoodResult> {
   const sixHoursAgo = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-  const emotionCounts: Record<string, number> = {};
+  const emotionCounts: Record<string, number> = dict<number>();
   let totalEmotionSignals = 0;
 
   // Emotion fields are often multi-emotion strings ("moved, warm, witnessed").

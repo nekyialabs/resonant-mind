@@ -8,6 +8,7 @@
  */
 
 import type { ConnectivityData } from "./graph";
+import { dict } from "../shared/dict";
 
 export interface EntityCount {
   count: number;
@@ -20,7 +21,7 @@ export interface EntityCount {
 export function computeEntityCounts(
   recentObs: Array<Record<string, unknown>>
 ): Record<string, EntityCount> {
-  const entityCounts: Record<string, EntityCount> = {};
+  const entityCounts: Record<string, EntityCount> = dict<EntityCount>();
 
   for (const row of recentObs) {
     const name = row.name as string;
@@ -101,7 +102,7 @@ export function computeRecurringPatterns(
   return Object.entries(entityCounts)
     .filter(([_, data]) => data.count >= 3)
     .map(([name, data]) => {
-      const entityEmotions: Record<string, number> = {};
+      const entityEmotions: Record<string, number> = dict<number>();
       for (const em of data.emotions) {
         entityEmotions[em] = (entityEmotions[em] || 0) + 1;
       }
@@ -145,7 +146,7 @@ export interface ContextCluster {
 export function computeContextClusters(
   entityCounts: Record<string, EntityCount>
 ): ContextCluster[] {
-  const contextGroups: Record<string, string[]> = {};
+  const contextGroups: Record<string, string[]> = dict<string[]>();
   for (const [name, data] of Object.entries(entityCounts)) {
     const key = Array.from(data.contexts).sort().join(",");
     if (!contextGroups[key]) contextGroups[key] = [];

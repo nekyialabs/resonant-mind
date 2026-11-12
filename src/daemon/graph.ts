@@ -6,6 +6,8 @@
  * Will become part of the Dreams region's introspection surface post-reshape.
  */
 
+import { dict } from "../shared/dict";
+
 export interface ConnectivityData {
   outgoing: number;
   incoming: number;
@@ -36,9 +38,9 @@ export interface GraphAnalysis {
 export function analyzeRelationGraph(
   relations: Array<Record<string, unknown>>
 ): GraphAnalysis {
-  const connectivity: Record<string, ConnectivityData> = {};
-  const relationTypeCounts: Record<string, number> = {};
-  const adjacency: Record<string, Set<string>> = {};
+  const connectivity: Record<string, ConnectivityData> = dict<ConnectivityData>();
+  const relationTypeCounts: Record<string, number> = dict<number>();
+  const adjacency: Record<string, Set<string>> = dict<Set<string>>();
 
   for (const rel of relations) {
     const from = rel.from_entity as string;

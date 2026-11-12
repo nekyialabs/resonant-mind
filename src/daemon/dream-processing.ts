@@ -29,6 +29,7 @@ import { getTimeOfDayContext, nightDateFor } from "../shared/time";
 import { getEmbedding, searchVectors } from "../shared/mind-helpers";
 import { getSubconsciousState } from "./state";
 import { composeManifestDream, type DreamMaterial } from "./dream-compose";
+import { dict } from "../shared/dict";
 
 /** Overlap coefficient threshold: |A∩B| / min(|A|,|B|) of fragment ids. */
 const RECURRENCE_OVERLAP_MIN = 0.5;
@@ -241,7 +242,7 @@ export async function processDream(
   }
 
   // Step 4: Maximize collision — pick from different entity groups
-  const entityGroups: Record<string, typeof allFragments> = {};
+  const entityGroups: Record<string, typeof allFragments> = dict<typeof allFragments>();
   for (const frag of allFragments) {
     const key = frag.entity || frag.type;
     if (!entityGroups[key]) entityGroups[key] = [];
@@ -268,7 +269,7 @@ export async function processDream(
     latentText += `- ${entityTag}${typeTag}${frag.content} [${Math.round(frag.score * 100)}% resonance]\n`;
   }
 
-  const seedConnections: Record<string, string[]> = {};
+  const seedConnections: Record<string, string[]> = dict<string[]>();
   for (const frag of dreamFragments) {
     if (!seedConnections[frag.source]) seedConnections[frag.source] = [];
     seedConnections[frag.source].push(
