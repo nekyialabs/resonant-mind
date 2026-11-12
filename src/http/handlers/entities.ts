@@ -1,6 +1,6 @@
 // HTTP handler for /api/entities — extracted from src/index.ts.
 import { jsonResponse } from "../response";
-import { deleteEntity, mergeEntities } from "../../shared/surgery";
+import { deleteEntity, mergeEntities, updateEntity, type EntityFieldUpdate } from "../../shared/surgery";
 import type { Env } from "../../types";
 
 export async function handleApiEntities(request: Request, env: Env, pathParts: string[]): Promise<Response> {
@@ -57,29 +57,24 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
   if (method === "PUT" && entityId) {
     const body = await request.json() as Record<string, unknown>;
 
-    // Get current entity
-    const current = await env.DB.prepare("SELECT id, name, entity_type, primary_context, salience, created_at, updated_at FROM entities WHERE id = ?").bind(entityId).first();
+    const current = await env.DB.prepare("SELECT id FROM entities WHERE id = ?").bind(entityId).first();
     if (!current) return jsonResponse({ error: "Not found" }, 404);
 
-    // Build dynamic update
-    const updates: string[] = [];
-    const values: unknown[] = [];
+    if (body.name !== undefined && (typeof body.name !== "string" || !body.name)) {
+      return jsonResponse({ error: "name must be a non-empty string" }, 400);
+    }
 
-    if (body.name !== undefined) { updates.push("name = ?"); values.push(body.name); }
-    if (body.entity_type !== undefined) { updates.push("entity_type = ?"); values.push(body.entity_type); }
-    if (body.context !== undefined) { updates.push("primary_context = ?"); values.push(body.context); }
-    if (body.salience !== undefined) { updates.push("salience = ?"); values.push(body.salience); }
+    const fields: EntityFieldUpdate = {};
+    if (body.name !== undefined) fields.name = body.name as string;
+    if (body.entity_type !== undefined) fields.entity_type = body.entity_type as string;
+    if (body.context !== undefined) fields.primary_context = body.context as string;
+    if (body.salience !== undefined) fields.salience = body.salience as string;
 
-    if (updates.length > 0) {
-      updates.push("updated_at = datetime('now')");
-      values.push(entityId);
-      await env.DB.prepare(`UPDATE entities SET ${updates.join(", ")} WHERE id = ?`).bind(...values).run();
-
-      // Update relations if name changed
-      if (body.name && body.name !== current.name) {
-        await env.DB.prepare("UPDATE relations SET from_entity = ? WHERE from_entity = ?").bind(body.name, current.name).run();
-        await env.DB.prepare("UPDATE relations SET to_entity = ? WHERE to_entity = ?").bind(body.name, current.name).run();
-      }
+    // One atomic statement: the entity row and the relations that name it.
+    const outcome = await updateEntity(env, entityId, fields);
+    if (outcome.status === "missing") return jsonResponse({ error: "Not found" }, 404);
+    if (outcome.status === "name-taken") {
+      return jsonResponse({ error: "Another entity already has that name. Merge them instead of renaming.", conflicting_entity_id: outcome.takenById }, 409);
     }
 
     return jsonResponse({ id: entityId, ...body });
