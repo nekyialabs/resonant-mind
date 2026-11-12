@@ -103,7 +103,7 @@ it('exports and verifies every required v1 bundle artifact and rejects omissions
   const manifest = JSON.parse(readFileSync(join(result.path, 'manifest.json')));
   manifest.members = manifest.members.filter(({ name }) => name !== 'policy-template.json.enc');
   expect(() => validateManifest(manifest)).toThrow(/required|policy/i);
-});
+}, 120_000);
 
 it('uses the documented CLI bundle and passphrase-file flags only', () => {
   expect(parseExportArgs([

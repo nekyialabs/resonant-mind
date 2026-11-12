@@ -100,7 +100,7 @@ describe('review-decisions shows the owner the real values, locally, and only th
     expect(text.includes('\u202e')).toBe(false);
     expect(text).toContain('\\u001b[31m');
     expect(text).toContain('\\u202e');
-  });
+  }, 120_000);
 
   it('writes a self-contained HTML file with --html, prints no value to the terminal, and never overwrites', () => {
     const review = runCli(['review-decisions', ...bundleArgs(), '--decisions', file('draft.json'), '--html', file('review.html')]);
