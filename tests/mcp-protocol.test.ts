@@ -108,4 +108,38 @@ describe('MCP protocol errors', () => {
       { type: 'text', text: 'Validation error: title is required' },
     ]);
   });
+  it.each([
+    'constructor',
+    'toString',
+    'hasOwnProperty',
+    '__proto__',
+    'valueOf',
+    'isPrototypeOf',
+    'toLocaleString',
+  ])('treats inherited property %s as an unknown tool', async (name) => {
+    const real = vi.fn(async () => 'ok');
+    const response = await handleMcpProtocolRequest(
+      request({ method: 'tools/call', params: { name, arguments: {} } }),
+      env,
+      options({ real }),
+    );
+
+    expect((await responseBody(response)).error).toEqual({
+      code: -32602,
+      message: `Unknown tool: ${name}`,
+    });
+    expect(real).not.toHaveBeenCalled();
+  });
+
+  it('still calls a handler registered under its own name', async () => {
+    const real = vi.fn(async () => 'ok');
+    const response = await handleMcpProtocolRequest(
+      request({ method: 'tools/call', params: { name: 'real', arguments: { a: 1 } } }),
+      env,
+      options({ real }),
+    );
+
+    expect((await responseBody(response)).result?.content).toEqual([{ type: 'text', text: 'ok' }]);
+    expect(real).toHaveBeenCalledWith(env, { a: 1 });
+  });
 });
