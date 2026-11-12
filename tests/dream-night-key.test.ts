@@ -45,7 +45,7 @@ const run = async (iso: string, env: Env, force = true) => {
 describe('dream "already tonight" key', () => {
   it('is the same on both sides of UTC midnight within one local night', async () => {
     for (const iso of ['2026-07-14T22:30:00Z', '2026-07-15T00:30:00Z']) {
-      const { env, lookups } = dreamEnv('Europe/London', { '2026-07-14': 99 });
+      const { env, lookups } = dreamEnv('Europe/Lisbon', { '2026-07-14': 99 });
       const out = await run(iso, env);
       expect(out.reason).toBe('already dreamed tonight (dream #99)');
       expect(lookups[0]).toBe('2026-07-14');
@@ -76,15 +76,15 @@ describe('legacy UTC-dated rows during the transition', () => {
   });
 
   it('mid-night deploy: a row written just after UTC midnight under the old key still counts', async () => {
-    // 01:30 BST on 15 July is 00:30Z. The old code wrote 2026-07-15 at 00:10Z.
-    const { env, lookups } = dreamEnv('Europe/London', { '2026-07-15': 12 }, 2);
+    // 01:30 WEST on 15 July is 00:30Z. The old code wrote 2026-07-15 at 00:10Z.
+    const { env, lookups } = dreamEnv('Europe/Lisbon', { '2026-07-15': 12 }, 2);
     const out = await run('2026-07-15T00:30:00Z', env);
     expect(lookups).toEqual(['2026-07-14', '2026-07-15']);
     expect(out.reason).toBe('already dreamed tonight (dream #12)');
   });
 
   it('a row under the new key wins without a second lookup', async () => {
-    const { env, lookups } = dreamEnv('Europe/London', { '2026-07-14': 3, '2026-07-15': 4 });
+    const { env, lookups } = dreamEnv('Europe/Lisbon', { '2026-07-14': 3, '2026-07-15': 4 });
     const out = await run('2026-07-15T00:30:00Z', env);
     expect(lookups).toEqual(['2026-07-14']);
     expect(out.reason).toBe('already dreamed tonight (dream #3)');
@@ -118,10 +118,10 @@ describe('orient last-dream cutoff', () => {
       },
     };
     vi.useFakeTimers();
-    // 01:30 BST on 15 July: the night is 14 July, so the cutoff is 13 July.
+    // 01:30 WEST on 15 July: the night is 14 July, so the cutoff is 13 July.
     vi.setSystemTime(new Date('2026-07-15T00:30:00Z'));
 
-    await handleMindOrient({ DB, LOCATION_TIMEZONE: 'Europe/London' } as unknown as Env).catch(() => undefined);
+    await handleMindOrient({ DB, LOCATION_TIMEZONE: 'Europe/Lisbon' } as unknown as Env).catch(() => undefined);
 
     const dreamQuery = binds.find((b) => /FROM dreams/.test(b.sql));
     expect(dreamQuery).toBeDefined();

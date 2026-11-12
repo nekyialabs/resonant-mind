@@ -36,28 +36,28 @@ describe('nightDateFor', () => {
     expect(at('2028-03-01T01:00:00Z')).toBe('2028-02-29');
   });
 
-  it('keeps one local night under one key in Europe/London during BST', () => {
-    // BST is UTC+1: the night of 14 July runs 21:00Z on the 14th to 04:00Z on the 15th.
-    expect(at('2026-07-14T20:59:59Z', 'Europe/London')).toBe('2026-07-14');
-    expect(at('2026-07-14T21:00:00Z', 'Europe/London')).toBe('2026-07-14');
-    expect(at('2026-07-14T23:30:00Z', 'Europe/London')).toBe('2026-07-14');
-    expect(at('2026-07-15T03:59:59Z', 'Europe/London')).toBe('2026-07-14');
-    expect(at('2026-07-15T04:00:00Z', 'Europe/London')).toBe('2026-07-15');
+  it('keeps one local night under one key in Europe/Lisbon during WEST', () => {
+    // WEST is UTC+1: the night of 14 July runs 21:00Z on the 14th to 04:00Z on the 15th.
+    expect(at('2026-07-14T20:59:59Z', 'Europe/Lisbon')).toBe('2026-07-14');
+    expect(at('2026-07-14T21:00:00Z', 'Europe/Lisbon')).toBe('2026-07-14');
+    expect(at('2026-07-14T23:30:00Z', 'Europe/Lisbon')).toBe('2026-07-14');
+    expect(at('2026-07-15T03:59:59Z', 'Europe/Lisbon')).toBe('2026-07-14');
+    expect(at('2026-07-15T04:00:00Z', 'Europe/Lisbon')).toBe('2026-07-15');
     // The UTC date flips at midnight UTC; the night key must not.
-    expect(at('2026-07-14T22:30:00Z', 'Europe/London')).toBe(at('2026-07-15T00:30:00Z', 'Europe/London'));
+    expect(at('2026-07-14T22:30:00Z', 'Europe/Lisbon')).toBe(at('2026-07-15T00:30:00Z', 'Europe/Lisbon'));
   });
 
-  it('keeps one local night under one key in Europe/London during GMT', () => {
-    expect(at('2026-01-14T21:59:59Z', 'Europe/London')).toBe('2026-01-14');
-    expect(at('2026-01-14T22:00:00Z', 'Europe/London')).toBe('2026-01-14');
-    expect(at('2026-01-15T04:59:59Z', 'Europe/London')).toBe('2026-01-14');
-    expect(at('2026-01-15T05:00:00Z', 'Europe/London')).toBe('2026-01-15');
+  it('keeps one local night under one key in Europe/Lisbon during WET', () => {
+    expect(at('2026-01-14T21:59:59Z', 'Europe/Lisbon')).toBe('2026-01-14');
+    expect(at('2026-01-14T22:00:00Z', 'Europe/Lisbon')).toBe('2026-01-14');
+    expect(at('2026-01-15T04:59:59Z', 'Europe/Lisbon')).toBe('2026-01-14');
+    expect(at('2026-01-15T05:00:00Z', 'Europe/Lisbon')).toBe('2026-01-15');
   });
 
-  it('follows the clock change in Europe/London', () => {
-    // 2026-03-29 01:00Z is when BST starts; local 05:00 BST is 04:00Z.
-    expect(at('2026-03-29T03:59:59Z', 'Europe/London')).toBe('2026-03-28');
-    expect(at('2026-03-29T04:00:00Z', 'Europe/London')).toBe('2026-03-29');
+  it('follows the clock change in Europe/Lisbon', () => {
+    // 2026-03-29 01:00Z is when WEST starts; local 05:00 WEST is 04:00Z.
+    expect(at('2026-03-29T03:59:59Z', 'Europe/Lisbon')).toBe('2026-03-28');
+    expect(at('2026-03-29T04:00:00Z', 'Europe/Lisbon')).toBe('2026-03-29');
   });
 
   it('works for a zone far ahead of UTC (Pacific/Auckland)', () => {
