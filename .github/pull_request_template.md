@@ -8,6 +8,6 @@
 
 ## Checklist
 
-- [ ] `npm run typecheck` passes
+- [ ] `npm run verify` passes (fixture check, typecheck, tests, release scan, audit)
 - [ ] All SQL uses parameterized `.bind()` (no string interpolation)
 - [ ] One concern per PR (not bundling unrelated changes)

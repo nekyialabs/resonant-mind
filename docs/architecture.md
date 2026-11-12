@@ -10,7 +10,7 @@ Resonant Mind is a single-mind cognitive substrate deployed as a Cloudflare Work
 - **Gemini embeddings:** text and multimodal vectors.
 - **Workers AI:** manifest dream composition.
 
-D1, Vectorize, multi-tenant household routing, and a bundled dashboard are not part of v4.
+D1 and Vectorize as runtimes, multi-tenant household routing, and a bundled dashboard are not part of v4. (Inside the Worker, `env.DB` and `env.VECTORS` are adapters over Postgres and pgvector that keep the older query interface; they are not D1 or Vectorize.)
 
 ## Cognitive topology
 
@@ -50,4 +50,10 @@ Images are capped at 10MB decoded, identified from their bytes as JPEG, PNG, GIF
 
 ## Schema
 
-The Postgres migration runner uses an advisory lock, transactions, SHA-256 checksums, and a `schema_migrations` ledger. It supports fresh v4 databases and refuses an untracked existing schema. The v3.2→v4 upgrade remains a separate staged migration project.
+The Postgres migration runner uses an advisory lock, transactions, SHA-256 checksums, and a `schema_migrations` ledger. It supports fresh v4 databases and refuses an untracked existing schema.
+
+A v3.2 mind is moved by the separate `migrate:v32` CLI (since 4.1.0), which reads the v3.2 source read-only and writes into a fresh, separate v4 database; it never upgrades in place. See the [user migration guide](../USER_MIGRATION_GUIDE.md).
+
+## Entity merge
+
+Both merge doors (`graph_shape` merge and `POST /api/entities/merge`) share one engine. Since 4.1.2 a merge is a single PostgreSQL statement: memories, their vectors, images, thread links, consolidation groups, relations and relational state all move to the surviving entity, or nothing changes. Merging an entity into itself is refused. For damage left by merges before 4.1.2, see [merge-damage-check.md](merge-damage-check.md).

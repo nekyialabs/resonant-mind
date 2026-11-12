@@ -39,7 +39,8 @@ Resonant Mind runs as a Cloudflare Worker — your deployment, your data.
 - **API key strength** — use a long random string for `MIND_API_KEY`, not a dictionary word
 - **Separate signing secret** — set `SIGNING_SECRET` in production so image URL signing doesn't share the API key
 - **MCP connector secret** — compatibility mode places a secret in the URL path, which can leak through logs and browser history. Prefer bearer-authenticated `/mcp`; if compatibility requires the path mode, use a separate long random secret and rotate it when exposed.
-- **CORS origin** — set `DASHBOARD_ALLOWED_ORIGIN` to restrict which domains can call the API
+- **CORS origin** — browsers may call the API only from the Worker's own origin, plus the one origin in `DASHBOARD_ALLOWED_ORIGIN` if you set it; requests still need the API key
+- **Internal key** — `INTERNAL_KEY`, if set, lets any request carrying the same value in `X-Internal-Key` through without `MIND_API_KEY`. It exists for Worker-to-Worker service bindings. Leave it unset unless you use one; if you set it, use a long random value, separate from `MIND_API_KEY`, and rotate it if it leaks
 - **Gemini API key** — this is sent to Google's API for embeddings. Treat it as a secret.
 - **Neon connection string** — the Postgres connection string contains credentials. Never commit it — use a Cloudflare Hyperdrive binding for the Worker and a secret environment variable for migrations.
 - **Worker DNS boundary** — Workers do not expose DNS resolution or socket pinning to application code. Remote image fetching therefore cannot promise DNS-rebinding/private-resolution protection; use direct uploads instead when the source URL is not fully trusted.

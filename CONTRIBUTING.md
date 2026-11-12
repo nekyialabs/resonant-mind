@@ -29,7 +29,7 @@ Focused bug fixes, tests, security hardening, and documentation corrections may 
 - R2 visual memory
 - API-key authentication
 
-D1, bundled dashboards, generic multi-tenancy, and non-Cloudflare deployment targets are outside the v4 core.
+A D1 runtime, bundled dashboards, generic multi-tenancy, and non-Cloudflare deployment targets are outside the v4 core. (D1 and SQLite appear only as *sources* for the v3.2 → v4 migrator in `scripts/v32-to-v4/`.)
 
 ## Development
 
@@ -37,14 +37,13 @@ D1, bundled dashboards, generic multi-tenancy, and non-Cloudflare deployment tar
 git clone https://github.com/nekyialabs/resonant-mind.git
 cd resonant-mind
 npm ci
-npm run typecheck
-npm test
-npm run scan:release
-npm audit --audit-level=moderate
+npm run verify
 npx wrangler deploy --dry-run
 ```
 
-Node.js 22 or newer is required. A live database is not required for static, registry, privacy, or bundle verification.
+`npm run verify` runs the v3.2 fixture check, `typecheck`, the full test suite, `scan:release` and `npm audit --audit-level=moderate`. Node.js 22 or newer is required. A live database is not required for static, registry, privacy, or bundle verification.
+
+Tests that need a live PostgreSQL with pgvector skip themselves unless their variable is set: `TEST_DATABASE_URL` (`npm run test:postgres`), `TEST_MERGE_DATABASE_URL` (`npm run test:postgres:merge`), and `TEST_ADMIN_DATABASE_URL` for the migrator suites (`npm run test:migration:postgres`), which create and drop their own scratch databases.
 
 For database testing, use a disposable Postgres database with the `vector` extension. Never use a lived cognitive database as a migration fixture.
 
@@ -72,9 +71,10 @@ src/
   adapter.ts        Postgres exposed through the query interface
   vectors.ts        pgvector retrieval adapter
 migrations/postgres/ ordered Postgres migrations
-scripts/             migration and release-scan tools
-tests/               characterization tests
-docs/                v4 architecture and migration boundaries
+scripts/             schema migration runner, release scan, merge-damage check and repair
+scripts/v32-to-v4/   the v3.2 → v4 migrator CLI (migrate:v32)
+tests/               characterization, integration and migrator tests
+docs/                architecture, migration evidence, merge-damage check, embeddings
 ```
 
 ## License

@@ -1,6 +1,6 @@
 # v3.2 to v4 operator-assisted migration guide
 
-This is the operator-facing guide for the pre-push release candidate. It documents a deliberate, operator-assisted data move; it is not a release announcement, a support commitment, or permission to upgrade a live system without rehearsal. Read this with [the strict agent runbook](AGENT_MIGRATION_RUNBOOK.md).
+This is the operator-facing guide for the v3.2 → v4 migrator, released in 4.1.0 and current as of 4.1.4. It documents a deliberate, operator-assisted data move; it is not a support commitment, or permission to upgrade a live system without rehearsal. Read this with [the strict agent runbook](AGENT_MIGRATION_RUNBOOK.md).
 
 ## Scope and hard boundary
 
@@ -17,7 +17,7 @@ The exact supported relational source families are:
 | Remote Cloudflare D1 | Manual export handoff only | The operator runs the remote export and supplies the resulting local SQL file. The CLI never opens the Cloudflare API. |
 | Fresh v4 PostgreSQL + pgvector | Only target supported by the importer | Distinct database with no non-system objects; released v4 migrations are applied by the target-preparation phase. |
 
-Drifted, partial, private, pre-`0003`, post-v3.2, unknown, or mixed schemas are refused. Existing v4 targets, SQLite targets, D1 targets, and the source itself are not import targets. This table is a first-release implementation boundary, not a product support promise.
+Drifted, partial, private, pre-`0003`, post-v3.2, unknown, or mixed schemas are refused by `inspect-source`. A drifted D1 export or SQLite file can be rebuilt on a copy into the exact v3.2 schema with `normalise-source` first (see [A source that has drifted from v3.2](#a-source-that-has-drifted-from-v32)); a drifted PostgreSQL source has no such route. Existing v4 targets, SQLite targets, D1 targets, and the source itself are not import targets. This table is an implementation boundary, not a product support promise.
 
 ### Source and target safety
 

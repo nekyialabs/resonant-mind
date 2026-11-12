@@ -106,6 +106,10 @@ Do not classify a private, partial, drifted, pre-`0003`, post-v3.2, or unknown s
 STOP: RMIG-E-SOURCE-FINGERPRINT: the source is not the exact supported public v3.2 schema. Restore an unchanged supported snapshot and restart inspection.
 ```
 
+If the source is a D1 export or a SQLite file that drifted from v3.2, there is a route since 4.1.4, and taking it is the owner's decision. After the stop, tell the owner that `normalise-source` can rebuild a **copy** into the exact v3.2 schema and set aside everything else, and point them to "A source that has drifted from v3.2" in the user guide. Do not run it on the owner's live data or on the only copy. The owner makes every choice it asks for: whether to pass `--null-context-default` or `--skip-virtual-tables`, whether a `possible_renames` pair is really a rename, and how to fix a `null-in-required-column` or `value-changed-by-copy` item in their copy. The agent never edits the copy to make an item go away. When `normalise-source` exits 0, restart this gate with `inspect-source --source-kind sqlite` on the normalised file. `set-aside.json` and any `--restore-sql` file hold memory content in plain text: treat them like the bundle, and never paste their contents. The restore SQL ends in `ROLLBACK;`. The agent never runs it and never changes that line; the owner reads it and runs it after `ready-for-cutover`. A drifted PostgreSQL source has no such route: the stop stands.
+
+A `wrangler d1 export` carries wrangler's own `d1_migrations` table. For `--source-kind d1-export`, `inspect-source` sets it aside when it is exactly wrangler's table and records the applied migration names under `details.d1_migrations_set_aside`; that is not drift and not a stop. A table of that name in any other shape is drift.
+
 For a remote D1 input:
 
 ```text

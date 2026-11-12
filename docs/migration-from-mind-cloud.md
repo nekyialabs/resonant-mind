@@ -1,6 +1,6 @@
 # Migrating to Resonant Mind v4
 
-For the operator-assisted pre-push candidate, read the [complete user migration guide](../USER_MIGRATION_GUIDE.md) and [strict agent migration runbook](../AGENT_MIGRATION_RUNBOOK.md). They are the source of truth for the exact public v3.2 boundaries, evidence gates, current CLI options, refusals, external handoffs, and manual cutover/rollback. They do not promise a release or support commitment.
+The [user migration guide](../USER_MIGRATION_GUIDE.md) and the [agent migration runbook](../AGENT_MIGRATION_RUNBOOK.md) are the source of truth for the exact public v3.2 boundaries, evidence gates, CLI options, refusals, external handoffs, and manual cutover and rollback. This page only points the way.
 
 ## Fresh installations
 
@@ -14,18 +14,15 @@ The migration runner records checksums and refuses to modify an existing untrack
 
 ## Existing v3.2 installations
 
-An in-place v3.2→v4 migration is **not yet released**. Do not point the fresh-install runner at an existing v3 database.
+Since 4.1.0 the `migrate:v32` CLI moves a public v3.2 mind (PostgreSQL, or D1/SQLite) into a **fresh, separate** v4 database. It never upgrades a v3 database in place and never changes the v3.2 source. Do not point the fresh-install runner at an existing v3 database: it refuses an untracked schema.
 
-The required upgrade is staged because v3 and v4 differ in entity uniqueness, people/nodes routing, observation versions, tensions, dormant/orphan semantics, and consolidation provenance:
+1. Back up the v3.2 database and its images, and rehearse the restore.
+2. Follow the [user migration guide](../USER_MIGRATION_GUIDE.md) step by step: inspect, export an encrypted bundle, review every decision yourself, import into a fresh target, copy images, re-embed, then `validate` and `status`.
+3. Switch your deployment over yourself, only after `status` reports `ready-for-cutover`. Rollback means pointing the deployment back at the untouched v3.2 configuration.
 
-1. preflight and backup;
-2. additive expansion;
-3. explicit backfill with audit reports;
-4. constraint and row-count validation;
-5. v4 Worker deployment and observation period;
-6. delayed destructive contraction.
+A D1 or SQLite mind whose schema drifted from the public v3.2 one can be rebuilt on a copy with `normalise-source` (4.1.4) first; see "A source that has drifted from v3.2" in the guide. A drifted PostgreSQL source has no such route yet.
 
-Until that path is reviewed and tested against populated fixtures, keep v3 databases on v3 and create a separate empty database for evaluating v4.
+What has and has not been proven is in [migration-v32-v4-acceptance.md](migration-v32-v4-acceptance.md).
 
 ## Private AI-mind deployments
 
