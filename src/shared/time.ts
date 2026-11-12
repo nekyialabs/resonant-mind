@@ -38,6 +38,35 @@ export function getTimeOfDayContext(timeZone = "UTC"): TimeContext {
   }
 }
 
+/** The night runs 22:00 to 05:00 local; hours before this belong to the night that began the evening before. */
+const NIGHT_END_HOUR = 5;
+
+/**
+ * The calendar date (YYYY-MM-DD) of the night a moment belongs to, in a zone.
+ * A night that starts at 22:00 on local day D, including the hours after
+ * midnight up to 05:00, is night D. Hours from 05:00 to 21:59 are dated by
+ * their own local day. An invalid zone falls back to UTC.
+ */
+export function nightDateFor(now: Date = new Date(), timeZone = "UTC"): string {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(now);
+  } catch {
+    return nightDateFor(now, "UTC");
+  }
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const local = new Date(Date.UTC(get("year"), get("month") - 1, get("day")));
+  if (get("hour") < NIGHT_END_HOUR) local.setUTCDate(local.getUTCDate() - 1);
+  return local.toISOString().slice(0, 10);
+}
+
 export function getRelativeTime(date: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();

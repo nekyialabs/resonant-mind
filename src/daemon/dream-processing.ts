@@ -25,7 +25,7 @@
  */
 
 import type { Env } from "../types";
-import { getTimeOfDayContext } from "../shared/time";
+import { getTimeOfDayContext, nightDateFor } from "../shared/time";
 import { getEmbedding, searchVectors } from "../shared/mind-helpers";
 import { getSubconsciousState } from "./state";
 import { composeManifestDream, type DreamMaterial } from "./dream-compose";
@@ -58,7 +58,7 @@ export async function processDream(
   await sweepUnvectorizedDreams(env);
 
   // Check if we already dreamed tonight
-  const tonight = new Date().toISOString().split('T')[0];
+  const tonight = nightDateFor(new Date(), env.LOCATION_TIMEZONE);
   const existing = await env.DB.prepare(
     'SELECT id FROM dreams WHERE dream_date = ?'
   ).bind(tonight).first();
