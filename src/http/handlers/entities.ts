@@ -44,6 +44,38 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
     return jsonResponse({ ...entity, observations: observations.results, relations: relations.results });
   }
 
+  // POST /api/entities/merge - merge two entities
+  if (method === "POST" && pathParts[2] === "merge") {
+    const body = await request.json() as Record<string, unknown>;
+    const mergeFromId = body.merge_from_id as number;
+    const mergeIntoId = body.merge_into_id as number;
+
+    if (!mergeFromId || !mergeIntoId) {
+      return jsonResponse({ error: "merge_from_id and merge_into_id required" }, 400);
+    }
+
+    // Shared engine (same as graph_shape merge): one atomic statement.
+    // Response shape unchanged.
+    if (Number(mergeFromId) === Number(mergeIntoId)) {
+      return jsonResponse({ error: "Cannot merge an entity into itself" }, 400);
+    }
+    let result;
+    try {
+      result = await mergeEntities(env, mergeFromId, mergeIntoId);
+    } catch (e) {
+      return jsonResponse({ error: `Merge failed and was not applied: ${e instanceof Error ? e.message : String(e)}` }, 500);
+    }
+    if (result.missing === "from") return jsonResponse({ error: "Source entity not found" }, 404);
+    if (result.missing === "into") return jsonResponse({ error: "Target entity not found" }, 404);
+
+    return jsonResponse({
+      success: true,
+      merged_from: result.fromName,
+      merged_into: result.intoName,
+      observations_moved: result.observationsMoved
+    });
+  }
+
   // POST /api/entities - create
   if (method === "POST") {
     const body = await request.json() as Record<string, unknown>;
@@ -78,38 +110,6 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
     }
 
     return jsonResponse({ id: entityId, ...body });
-  }
-
-  // POST /api/entities/merge - merge two entities
-  if (method === "POST" && pathParts[2] === "merge") {
-    const body = await request.json() as Record<string, unknown>;
-    const mergeFromId = body.merge_from_id as number;
-    const mergeIntoId = body.merge_into_id as number;
-
-    if (!mergeFromId || !mergeIntoId) {
-      return jsonResponse({ error: "merge_from_id and merge_into_id required" }, 400);
-    }
-
-    // Shared engine (same as graph_shape merge): one atomic statement.
-    // Response shape unchanged.
-    if (Number(mergeFromId) === Number(mergeIntoId)) {
-      return jsonResponse({ error: "Cannot merge an entity into itself" }, 400);
-    }
-    let result;
-    try {
-      result = await mergeEntities(env, mergeFromId, mergeIntoId);
-    } catch (e) {
-      return jsonResponse({ error: `Merge failed and was not applied: ${e instanceof Error ? e.message : String(e)}` }, 500);
-    }
-    if (result.missing === "from") return jsonResponse({ error: "Source entity not found" }, 404);
-    if (result.missing === "into") return jsonResponse({ error: "Target entity not found" }, 404);
-
-    return jsonResponse({
-      success: true,
-      merged_from: result.fromName,
-      merged_into: result.intoName,
-      observations_moved: result.observationsMoved
-    });
   }
 
   // DELETE /api/entities/:id - delete
