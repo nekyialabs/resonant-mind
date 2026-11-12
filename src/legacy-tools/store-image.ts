@@ -8,7 +8,7 @@ import { getEmbedding, imageUrl } from "../shared/mind-helpers";
 import { getImageEmbedding } from "../embeddings";
 import { normalizeText } from "../shared/text";
 import { R2_IMAGE_PATH_PREFIX } from "../shared/constants";
-import { decodeBase64Image, fetchRemoteImage, ImageSizeLimitError, validateImageBytes } from "../shared/image-security";
+import { decodeBase64Image, fetchRemoteImage, ImageSizeLimitError, imageErrorMessage, validateImageBytes } from "../shared/image-security";
 import { clampLimit } from "../shared/limits";
 
 /**
@@ -63,7 +63,7 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
         rawBinary = decodeBase64Image(imageData!);
       } catch (e) {
         console.error("store_image base64 decode failed", e);
-        return `Error: base64 decode failed — ${e instanceof Error ? e.message : "image_data is not valid base64"}`;
+        return `Error: base64 decode failed — ${imageErrorMessage(e, "image_data is not valid base64")}`;
       }
     }
 
@@ -71,7 +71,7 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
     try {
       imageFormat = validateImageBytes(rawBinary);
     } catch (error) {
-      return `Error: ${error instanceof Error ? error.message : "unsupported image bytes"}`;
+      return `Error: ${imageErrorMessage(error, "unsupported image bytes")}`;
     }
     const mimeType = imageFormat.mime;
 

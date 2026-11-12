@@ -81,9 +81,10 @@ export async function handleApiDreamComposeTest(request: Request, env: Env): Pro
       dream: text.trim(),
     });
   } catch (e) {
+    console.error("[dream-compose-test] AI.run failed", e);
     return jsonResponse({
       model,
-      error: `AI.run failed: ${e instanceof Error ? e.message : String(e)}`,
+      error: "AI.run failed",
       ms: Date.now() - started,
     }, 502);
   }

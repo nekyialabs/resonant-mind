@@ -11,6 +11,7 @@ import { R2_IMAGE_PATH_PREFIX } from "../shared/constants";
 import {
   canonicalImageMimeFromKey,
   ImageSizeLimitError,
+  imageErrorMessage,
   MAX_IMAGE_BYTES,
   MAX_MULTIPART_IMAGE_BYTES,
   readBodyWithLimit,
@@ -183,7 +184,7 @@ async function handleImageUpload(request: Request, env: Env): Promise<Response> 
     try {
       imageFormat = validateImageBytes(rawBytes);
     } catch (error) {
-      return jsonResponse({ error: error instanceof Error ? error.message : "Unsupported image bytes" }, 415);
+      return jsonResponse({ error: imageErrorMessage(error, "Unsupported image bytes") }, 415);
     }
     const mimeType = imageFormat.mime;
 
