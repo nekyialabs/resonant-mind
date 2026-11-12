@@ -5,7 +5,7 @@
 
 import type { Env } from "../types";
 import { getEmbedding } from "../shared/mind-helpers";
-import { normalizeText } from "../shared/text";
+import { normalizeText, escapeLike } from "../shared/text";
 import { editObservation } from "../shared/surgery";
 
 export async function handleMindEdit(env: Env, params: Record<string, unknown>): Promise<string> {
@@ -60,8 +60,8 @@ export async function handleMindEdit(env: Env, params: Record<string, unknown>):
       img = await env.DB.prepare(
         `SELECT i.id, i.description, i.path, i.context, i.emotion, i.weight, e.name as entity_name
          FROM images i LEFT JOIN entities e ON i.entity_id = e.id
-         WHERE i.description LIKE ? ORDER BY i.created_at DESC LIMIT 1`
-      ).bind(`%${descriptionMatch}%`).first();
+         WHERE i.description LIKE ? ESCAPE '\\' ORDER BY i.created_at DESC LIMIT 1`
+      ).bind(`%${escapeLike(descriptionMatch)}%`).first();
     }
 
     if (!img) {
@@ -157,8 +157,8 @@ export async function handleMindEdit(env: Env, params: Record<string, unknown>):
       ).bind(observationId).first();
     } else if (textMatch) {
       obs = await env.DB.prepare(
-        `SELECT id, content, entity_id, weight, emotion FROM observations WHERE content LIKE ? ORDER BY added_at DESC LIMIT 1`
-      ).bind(`%${textMatch}%`).first();
+        `SELECT id, content, entity_id, weight, emotion FROM observations WHERE content LIKE ? ESCAPE '\\' ORDER BY added_at DESC LIMIT 1`
+      ).bind(`%${escapeLike(textMatch)}%`).first();
     } else {
       return "Must provide observation_id, image_id, text_match, or description_match";
     }
