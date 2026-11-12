@@ -183,6 +183,7 @@ export async function handleMindTension(env: Env, params: Record<string, unknown
 
     return JSON.stringify({ error: `Invalid action '${action}'. Must be: list, add, sit, resolve, delete` });
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("mind_tension failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

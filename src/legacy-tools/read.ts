@@ -196,6 +196,7 @@ export async function handleMindRead(env: Env, params: Record<string, unknown>):
 
     return JSON.stringify({ error: `Invalid scope '${scope}'. Must be: all, context, recent, observation` });
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("mind_read failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

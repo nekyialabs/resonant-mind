@@ -8,8 +8,19 @@ import { getEmbedding, imageUrl } from "../shared/mind-helpers";
 import { getImageEmbedding } from "../embeddings";
 import { normalizeText } from "../shared/text";
 import { R2_IMAGE_PATH_PREFIX } from "../shared/constants";
-import { decodeBase64Image, fetchRemoteImage, validateImageBytes } from "../shared/image-security";
+import { decodeBase64Image, fetchRemoteImage, ImageSizeLimitError, validateImageBytes } from "../shared/image-security";
 import { clampLimit } from "../shared/limits";
+
+/**
+ * fetchRemoteImage throws its own messages for URL validation, redirects,
+ * status, size and timeout (all start with "source_url" or "Remote image");
+ * anything else is a lower-level network error and is not shown to the caller.
+ */
+function deliberateFetchMessage(e: unknown): string {
+  if (e instanceof ImageSizeLimitError) return e.message;
+  if (e instanceof Error && /^(source_url|Remote image)/.test(e.message)) return e.message;
+  return "the URL could not be fetched";
+}
 
 export async function handleMindStoreImage(env: Env, params: Record<string, unknown>): Promise<string> {
   const action = params.action as string;
@@ -44,12 +55,14 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
       try {
         rawBinary = await fetchRemoteImage(sourceUrl);
       } catch (e) {
-        return `Error: source_url fetch failed — ${e instanceof Error ? e.message : String(e).slice(0, 120)}`;
+        console.error("store_image source_url fetch failed", e);
+        return `Error: source_url fetch failed — ${deliberateFetchMessage(e)}`;
       }
     } else {
       try {
         rawBinary = decodeBase64Image(imageData!);
       } catch (e) {
+        console.error("store_image base64 decode failed", e);
         return `Error: base64 decode failed — ${e instanceof Error ? e.message : "image_data is not valid base64"}`;
       }
     }

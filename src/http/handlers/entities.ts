@@ -63,7 +63,8 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
     try {
       result = await mergeEntities(env, mergeFromId, mergeIntoId);
     } catch (e) {
-      return jsonResponse({ error: `Merge failed and was not applied: ${e instanceof Error ? e.message : String(e)}` }, 500);
+      console.error("Entity merge failed", e);
+      return jsonResponse({ error: "Merge failed and was not applied" }, 500);
     }
     if (result.missing === "from") return jsonResponse({ error: "Source entity not found" }, 404);
     if (result.missing === "into") return jsonResponse({ error: "Target entity not found" }, 404);

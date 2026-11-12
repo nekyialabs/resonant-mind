@@ -174,6 +174,7 @@ export async function handleMindPatterns(env: Env, params: Record<string, unknow
 
     return output.join("\n");
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("mind_patterns failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

@@ -104,6 +104,7 @@ export async function handleMindTimeline(env: Env, params: Record<string, unknow
       timeline
     }, null, 2);
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("mind_timeline failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

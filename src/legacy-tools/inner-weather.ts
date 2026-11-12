@@ -104,6 +104,7 @@ export async function handleMindInnerWeather(env: Env): Promise<string> {
 
     return JSON.stringify(result, null, 2);
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("inner_weather failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

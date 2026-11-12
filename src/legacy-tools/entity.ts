@@ -124,7 +124,8 @@ export async function handleMindEntity(env: Env, params: Record<string, unknown>
       try {
         result = await mergeEntities(env, mergeFromId, mergeIntoId);
       } catch (e) {
-        return `Merge of #${mergeFromId} into #${mergeIntoId} failed and was not applied: ${e instanceof Error ? e.message : String(e)}`;
+        console.error(`Merge of #${mergeFromId} into #${mergeIntoId} failed`, e);
+        return `Merge of #${mergeFromId} into #${mergeIntoId} failed and was not applied`;
       }
       if (result.refused === "same-entity") return `Cannot merge entity #${mergeFromId} into itself`;
       if (result.missing === "from") return `Source entity #${mergeFromId} not found`;
