@@ -4,6 +4,14 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0�
 
 ---
 
+## [Unreleased]
+
+### Docs
+
+- **The docs caught up with 4.1.1 to 4.1.4.** The README said v4.0.0; it now names the current release, points anyone whose mind merged entities before 4.1.2 to `docs/merge-damage-check.md`, says that a drifted D1/SQLite source has a route through `normalise-source`, lists the optional `DASHBOARD_ALLOWED_ORIGIN` and `INTERNAL_KEY` settings, uses `npm run verify`, and links every doc. The agent runbook now covers `normalise-source` (the owner's decision, never on live data, restore SQL never run by the agent) and wrangler's `d1_migrations` table. `docs/migration-from-mind-cloud.md` no longer says the v3.2 migration is unreleased. `docs/architecture.md` describes the migrator and the 4.1.2 merge engine. The acceptance record is marked as the 4.1.0 record. SECURITY.md explains `INTERNAL_KEY`, CONTRIBUTING.md and the PR template use `npm run verify` and name the live-database test variables. No code changed.
+
+---
+
 ## [4.1.4] — 2026-11-10
 
 **The v3.2 → v4 migrator: D1 minds set up the way the v3.2 README says are no longer refused, and a supported route for minds whose schema drifted from v3.2.** Only the migrator changes; a mind already running v4 needs to do nothing.

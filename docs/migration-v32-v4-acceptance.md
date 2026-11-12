@@ -1,5 +1,7 @@
 # v3.2 → v4 migration acceptance evidence
 
+> **This is the record made for 4.1.0 (21 October 2026), and the body below is kept as it was then.** Where it says "release candidate" or "has not shipped", read it as of that date: the migrator shipped in 4.1.0. Later evidence is in the [changelog](../CHANGELOG.md): 4.1.1 (the first real D1 migration, by a v3.2 user), 4.1.3 (empty dates and times become decisions), and 4.1.4 (a real `wrangler d1 export` as a test fixture, and `normalise-source` for drifted D1/SQLite sources). This record does not cover `normalise-source`. Its restore SQL has not yet been run against a real migration.
+
 This is a local operator-assisted acceptance record for the release-candidate implementation. It is **not** a support or release declaration. The CLI reads only the exact public v3.2 PostgreSQL schema and the exact post-0003 D1/SQLite schema, exports read-only snapshots, writes only to a distinct fresh v4 target, and never self-attests cutover.
 
 ## Scope and safety boundary
