@@ -146,3 +146,51 @@ describe('PUT /api/entities/:id rename', () => {
     expect(writes(calls)).toEqual([]);
   });
 });
+
+describe('PUT /api/entities/:id validation', () => {
+  const put = (env: Env, body: Record<string, unknown>) =>
+    handleApiEntities(
+      new Request('https://mind.example/api/entities/1', { method: 'PUT', body: JSON.stringify(body) }),
+      env,
+      ['api', 'entities', '1'],
+    );
+
+  it.each([
+    [{ name: '   ' }, 'name'],
+    [{ name: '' }, 'name'],
+    [{ name: 5 }, 'name'],
+    [{ entity_type: '' }, 'entity_type'],
+    [{ entity_type: '  ' }, 'entity_type'],
+    [{ entity_type: null }, 'entity_type'],
+    [{ context: '' }, 'context'],
+    [{ context: 7 }, 'context'],
+    [{ salience: '' }, 'salience'],
+    [{ salience: 'high' }, 'salience'],
+    [{ salience: 'ACTIVE' }, 'salience'],
+    [{ salience: 3 }, 'salience'],
+  ])('rejects %j with 400 and writes nothing', async (body, field) => {
+    const { env, calls } = entityEnv();
+
+    const res = await put(env, body);
+
+    expect(res.status).toBe(400);
+    expect(String(((await res.json()) as { error: string }).error)).toContain(field);
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it('trims the name before the taken-name check and the write', async () => {
+    const taken = entityEnv();
+    expect((await put(taken.env, { name: '  Harbor  ' })).status).toBe(409);
+
+    const { env, calls } = entityEnv();
+    const res = await put(env, { name: '  Beacon  ' });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ id: 1, name: 'Beacon' });
+    expect(writes(calls)[0].args).toEqual([1, 'Lantern', 'Beacon']);
+  });
+
+  it.each(['foundational', 'active', 'background', 'archive'])('accepts salience %s', async (salience) => {
+    const { env } = entityEnv();
+    expect((await put(env, { salience })).status).toBe(200);
+  });
+});

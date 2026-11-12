@@ -3,6 +3,8 @@ import { jsonResponse } from "../response";
 import { deleteEntity, mergeEntities, updateEntity, type EntityFieldUpdate } from "../../shared/surgery";
 import type { Env } from "../../types";
 
+const ENTITY_SALIENCE = ["foundational", "active", "background", "archive"];
+
 export async function handleApiEntities(request: Request, env: Env, pathParts: string[]): Promise<Response> {
   const method = request.method;
   const entityId = pathParts[2] ? parseInt(pathParts[2]) : null;
@@ -93,15 +95,26 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
     const current = await env.DB.prepare("SELECT id FROM entities WHERE id = ?").bind(entityId).first();
     if (!current) return jsonResponse({ error: "Not found" }, 404);
 
-    if (body.name !== undefined && (typeof body.name !== "string" || !body.name)) {
-      return jsonResponse({ error: "name must be a non-empty string" }, 400);
-    }
-
+    const isText = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
     const fields: EntityFieldUpdate = {};
-    if (body.name !== undefined) fields.name = body.name as string;
-    if (body.entity_type !== undefined) fields.entity_type = body.entity_type as string;
-    if (body.context !== undefined) fields.primary_context = body.context as string;
-    if (body.salience !== undefined) fields.salience = body.salience as string;
+    if (body.name !== undefined) {
+      if (!isText(body.name)) return jsonResponse({ error: "name must be a non-empty string" }, 400);
+      fields.name = body.name.trim();
+    }
+    if (body.entity_type !== undefined) {
+      if (!isText(body.entity_type)) return jsonResponse({ error: "entity_type must be a non-empty string" }, 400);
+      fields.entity_type = body.entity_type;
+    }
+    if (body.context !== undefined) {
+      if (!isText(body.context)) return jsonResponse({ error: "context must be a non-empty string" }, 400);
+      fields.primary_context = body.context;
+    }
+    if (body.salience !== undefined) {
+      if (!isText(body.salience) || !ENTITY_SALIENCE.includes(body.salience)) {
+        return jsonResponse({ error: `salience must be one of: ${ENTITY_SALIENCE.join(", ")}` }, 400);
+      }
+      fields.salience = body.salience;
+    }
 
     // One atomic statement: the entity row and the relations that name it.
     const outcome = await updateEntity(env, entityId, fields);
@@ -110,7 +123,7 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
       return jsonResponse({ error: "Another entity already has that name. Merge them instead of renaming.", conflicting_entity_id: outcome.takenById }, 409);
     }
 
-    return jsonResponse({ id: entityId, ...body });
+    return jsonResponse({ id: entityId, ...body, ...(fields.name !== undefined ? { name: fields.name } : {}) });
   }
 
   // DELETE /api/entities/:id - delete
