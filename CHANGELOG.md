@@ -4,7 +4,30 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0�
 
 ---
 
-## [Unreleased]
+## [4.1.5] — 2026-11-13
+
+**Security and correctness fixes from a code audit (#25). Upgrade: two advisories apply to every version from 3.0.0 to 4.1.4.** No schema change and no migration. After upgrading, read the first advisory's note on rotating secrets.
+
+### Security
+
+- **MCP `tools/call` dispatches only to registered tools** ([GHSA-xcrf-h4v5-rvj8](https://github.com/nekyialabs/resonant-mind/security/advisories/GHSA-xcrf-h4v5-rvj8), critical). The tool lookup accepted names that weren't tools, and an authenticated MCP caller could read the Worker's secrets. Only own properties of the handler map that are functions are dispatched now; anything else gets "Unknown tool". If `/mcp` was reachable by anything but a fully trusted client, rotate `MIND_API_KEY`, `MCP_CONNECTOR_SECRET`, `SIGNING_SECRET`, `INTERNAL_KEY` and the Gemini and weather keys.
+- **Tension ids resolve to exactly one tension** ([GHSA-jqxf-7ghx-6cq8](https://github.com/nekyialabs/resonant-mind/security/advisories/GHSA-jqxf-7ghx-6cq8), medium). `active_tense` sit/resolve/delete used an unescaped `LIKE` prefix, and delete removed every match. Now an id resolves by exact match first, otherwise by one escaped prefix of at least 10 characters (20 for delete). An ambiguous prefix is refused, delete removes one row by id, and `list` shows full ids.
+- **Literal text matching.** `text_match`, `description_match`, search and bond-name lookups escape `%`, `_` and `\`.
+- **Bounded inputs.**
+  - `limit`, `n_results`, `days` and `hours` are clamped (at most 500), falling back to each default on bad input.
+  - `offset` must be a non-negative integer.
+  - `archive_old` needs `older_than_days` ≥ 1 and never archives the `self` entity.
+  - An image `observation_id` must be a positive integer (400 otherwise).
+- **Error text.** Exception text is logged server-side, and callers get a generic message, as SECURITY.md says. Validation and image-check messages are unchanged.
+- **Name-keyed groupings.** The daemon and other groupings keyed by stored names use prototype-free records, so an entity or context name can no longer break the nightly jobs.
+
+### Fixed
+
+- **Renaming an entity onto a taken name is refused** (`graph_shape` edit, and `PUT /api/entities/:id` with a 409). Before, the relations were rewritten first and then pointed at the other entity. The rename and the relation rewrites are now one statement, and PUT validates its fields.
+- **One dream per local night.** The "already dreamed tonight" check is keyed on the night date in `LOCATION_TIMEZONE`, so the hours after midnight belong to the night that started at 22:00. Before, it used the UTC date, which allowed a second dream in one night. For this release the old UTC key is honoured too, so the switch-over night is neither skipped nor doubled. Orient's "last night's dream" uses the same date. Forced dreams keep their existing keying.
+- **`POST /api/entities/merge` is reachable again**; before, the create route answered it.
+- **The `graph_shape` salience enum** now lists what the handler accepts (foundational, active, background, archive).
+- **MCP `serverInfo` reports the release version.** It had said 4.0.1 since 4.0.1.
 
 ### Docs
 
