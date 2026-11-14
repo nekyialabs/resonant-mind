@@ -30,6 +30,7 @@
  */
 
 import type { Env } from "../types";
+import { dict } from "../shared/dict";
 
 interface CompassRow {
   id: number;
@@ -123,7 +124,7 @@ export async function handleCompassRead(env: Env, params: Record<string, unknown
   }
 
   // Group by kind
-  const byKind: Record<string, CompassRow[]> = {};
+  const byKind: Record<string, CompassRow[]> = dict<CompassRow[]>();
   for (const row of rows) {
     if (!byKind[row.kind]) byKind[row.kind] = [];
     byKind[row.kind].push(row);
@@ -238,7 +239,8 @@ export async function handleCompassCreate(env: Env, params: Record<string, unkno
         `).bind(inserted.id, sourceType, sourceId, reason ?? null).run();
         provenanceMsg = `\nProvenance edge: ${sourceType}#${sourceId}${reason ? ` — ${reason}` : ""}`;
       } catch (e) {
-        provenanceMsg = `\nProvenance edge failed: ${e instanceof Error ? e.message : String(e)}`;
+        console.error("[compass] provenance edge write failed", e);
+        provenanceMsg = `\nProvenance edge failed`;
       }
     }
   }
@@ -292,7 +294,8 @@ export async function handleCompassAssert(env: Env, params: Record<string, unkno
       `).bind(row.id, sourceType, sourceId, reason ?? null).run();
       provenanceMsg = `\nProvenance edge added: ${sourceType}#${sourceId}${reason ? ` — ${reason}` : ""}`;
     } catch (e) {
-      provenanceMsg = `\nProvenance edge failed: ${e instanceof Error ? e.message : String(e)}`;
+      console.error("[compass] provenance edge write failed", e);
+      provenanceMsg = `\nProvenance edge failed`;
     }
   }
 
@@ -360,7 +363,8 @@ export async function handleCompassRefuse(env: Env, params: Record<string, unkno
     }
     return `Refusal recorded against compass #${compassId} (edge #${inserted.id}): ${reason.slice(0, 200)}`;
   } catch (e) {
-    return `Compass #${compassId} touched, but persisting the refusal reason FAILED: ${e instanceof Error ? e.message : String(e)}`;
+    console.error("[compass] persisting provenance failed", e);
+    return `Compass #${compassId} touched, but persisting the refusal reason FAILED`;
   }
 }
 
@@ -392,6 +396,7 @@ export async function handleCompassHold(env: Env, params: Record<string, unknown
     }
     return `Holding: ${row.content}${note ? `\nNote: ${note}` : ""}\n(Hold persisted — edge #${inserted.id}.)`;
   } catch (e) {
-    return `Holding: ${row.content} — but persisting the hold FAILED: ${e instanceof Error ? e.message : String(e)}`;
+    console.error("[compass] persisting provenance failed", e);
+    return `Holding: ${row.content} — but persisting the hold FAILED`;
   }
 }

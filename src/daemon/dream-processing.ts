@@ -25,10 +25,11 @@
  */
 
 import type { Env } from "../types";
-import { getTimeOfDayContext } from "../shared/time";
+import { getTimeOfDayContext, nightDateFor } from "../shared/time";
 import { getEmbedding, searchVectors } from "../shared/mind-helpers";
 import { getSubconsciousState } from "./state";
 import { composeManifestDream, type DreamMaterial } from "./dream-compose";
+import { dict } from "../shared/dict";
 
 /** Overlap coefficient threshold: |A∩B| / min(|A|,|B|) of fragment ids. */
 const RECURRENCE_OVERLAP_MIN = 0.5;
@@ -57,11 +58,24 @@ export async function processDream(
   // date gate — the sweep must run even on nights we already dreamed.
   await sweepUnvectorizedDreams(env);
 
-  // Check if we already dreamed tonight
-  const tonight = new Date().toISOString().split('T')[0];
-  const existing = await env.DB.prepare(
+  // Check if we already dreamed tonight. The key is the night date in
+  // LOCATION_TIMEZONE (nightDateFor). A forced dream outside the 22:00-05:00
+  // window is keyed to that day like any other, so it counts as that
+  // evening's dream; this is the existing behaviour, unchanged.
+  const now = new Date();
+  const tonight = nightDateFor(now, env.LOCATION_TIMEZONE);
+  let existing = await env.DB.prepare(
     'SELECT id FROM dreams WHERE dream_date = ?'
   ).bind(tonight).first();
+  // Transition for one release: rows written before the local-night key were
+  // keyed by the UTC date. Count such a row as tonight's dream too. Remove
+  // this lookup after the next release.
+  const legacyUtcKey = now.toISOString().slice(0, 10);
+  if (!existing && legacyUtcKey !== tonight) {
+    existing = await env.DB.prepare(
+      'SELECT id FROM dreams WHERE dream_date = ?'
+    ).bind(legacyUtcKey).first();
+  }
   if (existing) {
     if (!regenerate) {
       return { generated: false, reason: `already dreamed tonight (dream #${existing.id})` };
@@ -241,7 +255,7 @@ export async function processDream(
   }
 
   // Step 4: Maximize collision — pick from different entity groups
-  const entityGroups: Record<string, typeof allFragments> = {};
+  const entityGroups: Record<string, typeof allFragments> = dict<typeof allFragments>();
   for (const frag of allFragments) {
     const key = frag.entity || frag.type;
     if (!entityGroups[key]) entityGroups[key] = [];
@@ -268,7 +282,7 @@ export async function processDream(
     latentText += `- ${entityTag}${typeTag}${frag.content} [${Math.round(frag.score * 100)}% resonance]\n`;
   }
 
-  const seedConnections: Record<string, string[]> = {};
+  const seedConnections: Record<string, string[]> = dict<string[]>();
   for (const frag of dreamFragments) {
     if (!seedConnections[frag.source]) seedConnections[frag.source] = [];
     seedConnections[frag.source].push(

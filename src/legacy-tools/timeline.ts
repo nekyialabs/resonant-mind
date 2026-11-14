@@ -6,12 +6,14 @@
 import type { Env } from "../types";
 import { searchVectors } from "../shared/mind-helpers";
 import { recordAccessTracking } from "../daemon/state";
+import { dict } from "../shared/dict";
+import { clampLimit } from "../shared/limits";
 
 export async function handleMindTimeline(env: Env, params: Record<string, unknown>): Promise<string> {
   const query = params.query as string;
   const startDate = params.start_date as string;
   const endDate = params.end_date as string;
-  const nResults = (params.n_results as number) || 50;
+  const nResults = clampLimit(params.n_results, 50);
 
   try {
     const vectorResults = await searchVectors(env, query, nResults * 2);
@@ -67,7 +69,7 @@ export async function handleMindTimeline(env: Env, params: Record<string, unknow
 
     dated.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
-    const byMonth: Record<string, any[]> = {};
+    const byMonth: Record<string, any[]> = dict<any[]>();
     for (const item of dated) {
       const monthKey = item.timestamp.toISOString().substring(0, 7);
       if (!byMonth[monthKey]) byMonth[monthKey] = [];
@@ -104,6 +106,7 @@ export async function handleMindTimeline(env: Env, params: Record<string, unknow
       timeline
     }, null, 2);
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("mind_timeline failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

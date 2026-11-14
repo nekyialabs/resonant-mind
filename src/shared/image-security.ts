@@ -4,6 +4,18 @@ export const MAX_MULTIPART_IMAGE_BYTES = MAX_IMAGE_BYTES + 64 * 1024;
 
 export class ImageSizeLimitError extends Error {}
 
+/**
+ * Message safe to show a caller for an error thrown while handling image
+ * input: the module's own messages (plain Error or ImageSizeLimitError) pass
+ * through; anything else (a non-Error value, a TypeError or RangeError from
+ * lower down) gets `fallback`.
+ */
+export function imageErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof ImageSizeLimitError) return error.message;
+  if (error instanceof Error && error.constructor === Error) return error.message;
+  return fallback;
+}
+
 export async function readBodyWithLimit(request: Request, maxBytes: number): Promise<Uint8Array> {
   const declaredLength = request.headers.get('content-length');
   if (declaredLength !== null) {

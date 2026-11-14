@@ -17,6 +17,7 @@ import {
 import { getNoveltyPool, getDormantPool } from "../daemon/pools";
 import { SURFACE_POOL_RATIOS, VECTOR_SCORE_CORE, VECTOR_SCORE_EDGE } from "../shared/constants";
 import { handleMindSurfaceSpark } from "./surface-spark";
+import { clampLimit } from "../shared/limits";
 
 // ============ LIVING SURFACE: Mind Reorganization Through Use ============
 // The act of surfacing changes what surfaces next
@@ -69,7 +70,7 @@ export async function handleMindSurface(env: Env, params: Record<string, unknown
 
   // Resonant mode (default): mood/emotion-based 3-pool surfacing
   const includeMetabolized = params.include_metabolized as boolean || false;
-  const limit = (params.limit as number) || 10;
+  const limit = clampLimit(params.limit, 10);
   const query = params.query as string;
 
   // Get subconscious state for current mood

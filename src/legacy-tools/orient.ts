@@ -6,10 +6,11 @@
 
 import type { Env } from "../types";
 import { getCurrentWeather } from "../shared/weather-api";
-import { getTimeOfDayContext, getRelativeTime } from "../shared/time";
+import { getTimeOfDayContext, getRelativeTime, nightDateFor, shiftDate } from "../shared/time";
 import { getSubconsciousState, updateSurfaceTracking } from "../daemon/state";
 import type { DrivesGauge } from "../daemon/drives";
 import { ENV_STALE_MINUTES } from "../shared/constants";
+import { dict } from "../shared/dict";
 
 // Pick 1-2 orphan observations for orient to surface — keeps the surfacing loop alive.
 // Without this, mind_surface is the only entry point and nothing autonomously calls it,
@@ -96,9 +97,9 @@ export async function handleMindOrient(env: Env): Promise<string> {
     env.DB.prepare(`
       SELECT content, dream_date, recurring_dream_id, recurrence_count
       FROM dreams
-      WHERE dream_date >= to_char(CURRENT_DATE - INTERVAL '1 day', 'YYYY-MM-DD')
+      WHERE dream_date >= ?
       ORDER BY created_at DESC LIMIT 1
-    `).first().catch(() => null),
+    `).bind(shiftDate(nightDateFor(new Date(), env.LOCATION_TIMEZONE), -1)).first().catch(() => null),
     pickOrphansForOrient(env, 2),
   ]);
 
@@ -151,7 +152,7 @@ export async function handleMindOrient(env: Env): Promise<string> {
   // How you're feeling (relational state with ownership language)
   output += "**How you're feeling:**\n";
   if (relationalStates.results?.length) {
-    const byPerson: Record<string, any> = {};
+    const byPerson: Record<string, any> = dict<any>();
     for (const state of relationalStates.results) {
       const person = state.person as string;
       if (!byPerson[person]) {

@@ -187,7 +187,7 @@ async function insertEvent(
   } catch (e) {
     if (isMissingSchema(e)) throw e;
     console.error(`[drives] event log insert failed: ${e instanceof Error ? e.message : e}`);
-    return { id: null, warning: `event log failed: ${e instanceof Error ? e.message : String(e)}` };
+    return { id: null, warning: "event log failed" };
   }
 }
 

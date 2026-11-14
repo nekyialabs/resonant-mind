@@ -83,8 +83,10 @@ export async function handleMcpProtocolRequest(
         const toolName = (params as { name?: string }).name;
         if (!toolName) throw new MCPProtocolError(-32602, "Tool name is required");
 
-        const toolHandler = options.toolHandlers[toolName];
-        if (!toolHandler) throw new MCPProtocolError(-32602, `Unknown tool: ${toolName}`);
+        const toolHandler = Object.hasOwn(options.toolHandlers, toolName)
+          ? options.toolHandlers[toolName]
+          : undefined;
+        if (typeof toolHandler !== "function") throw new MCPProtocolError(-32602, `Unknown tool: ${toolName}`);
 
         const toolParams =
           (params as { arguments?: Record<string, unknown> }).arguments ?? {};

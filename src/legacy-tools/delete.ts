@@ -6,6 +6,7 @@
 import type { Env } from "../types";
 import { deleteObservation, deleteEntity } from "../shared/surgery";
 import { R2_IMAGE_PATH_PREFIX } from "../shared/constants";
+import { escapeLike } from "../shared/text";
 
 export async function handleMindDelete(env: Env, params: Record<string, unknown>): Promise<string> {
   const observationId = params.observation_id as number;
@@ -25,8 +26,8 @@ export async function handleMindDelete(env: Env, params: Record<string, unknown>
   if (textMatch) {
     // Find and delete by text match
     const obs = await env.DB.prepare(
-      `SELECT id, content, entity_id FROM observations WHERE content LIKE ? ORDER BY added_at DESC LIMIT 1`
-    ).bind(`%${textMatch}%`).first();
+      `SELECT id, content, entity_id FROM observations WHERE content LIKE ? ESCAPE '\\' ORDER BY added_at DESC LIMIT 1`
+    ).bind(`%${escapeLike(textMatch)}%`).first();
 
     if (!obs) return `No observation found matching "${textMatch}"`;
 

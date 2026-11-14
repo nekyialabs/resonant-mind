@@ -4,6 +4,7 @@ import { getEmbedding } from "../../shared/mind-helpers";
 import { normalizeText } from "../../shared/text";
 import { editObservation, deleteObservation } from "../../shared/surgery";
 import type { Env } from "../../types";
+import { clampLimit, clampOffset } from "../../shared/limits";
 
 export async function handleApiObservations(request: Request, env: Env, pathParts: string[]): Promise<Response> {
   const method = request.method;
@@ -16,8 +17,8 @@ export async function handleApiObservations(request: Request, env: Env, pathPart
     const entityId = params.get("entity_id");
     const weight = params.get("weight");
     const charge = params.get("charge");
-    const limit = parseInt(params.get("limit") || "100");
-    const offset = parseInt(params.get("offset") || "0");
+    const limit = clampLimit(params.get("limit"), 100);
+    const offset = clampOffset(params.get("offset"));
 
     let query = `SELECT o.*, e.name as entity_name, e.entity_type
                  FROM observations o JOIN entities e ON o.entity_id = e.id`;

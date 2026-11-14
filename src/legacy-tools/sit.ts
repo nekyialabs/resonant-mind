@@ -5,6 +5,7 @@
 
 import type { Env } from "../types";
 import { getEmbedding } from "../shared/mind-helpers";
+import { escapeLike } from "../shared/text";
 
 export async function handleMindSit(env: Env, params: Record<string, unknown>): Promise<string> {
   const observationId = params.observation_id as number;
@@ -30,8 +31,8 @@ export async function handleMindSit(env: Env, params: Record<string, unknown>): 
       `SELECT o.id, o.content, o.weight, o.charge, o.sit_count, o.emotion, e.name as entity_name
        FROM observations o
        JOIN entities e ON o.entity_id = e.id
-       WHERE o.content LIKE ? ORDER BY o.added_at DESC LIMIT 1`
-    ).bind(`%${textMatch}%`).first();
+       WHERE o.content LIKE ? ESCAPE '\\' ORDER BY o.added_at DESC LIMIT 1`
+    ).bind(`%${escapeLike(textMatch)}%`).first();
   } else if (semanticQuery) {
     matchMethod = 'semantic';
     // Use vector search to find closest matching observation

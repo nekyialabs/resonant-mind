@@ -17,6 +17,7 @@
 
 import type { Env } from "../types";
 import { computeCoreAffect } from "./affect";
+import { dict } from "../shared/dict";
 
 /** Once-per-isolate guards so honest failure logs don't spam every write/tick. */
 let warnedSomaticRead = false;
@@ -47,7 +48,7 @@ export async function computeSomaticMarkers(env: Env): Promise<number> {
     if (!raw) continue;
     const mult = r.weight === "heavy" ? 3 : r.weight === "medium" ? 2 : 1;
     let counts = perEntity.get(entityId);
-    if (!counts) { counts = {}; perEntity.set(entityId, counts); }
+    if (!counts) { counts = dict<number>(); perEntity.set(entityId, counts); }
     for (const token of raw.split(",")) {
       const t = token.trim().toLowerCase();
       if (!t) continue;
@@ -94,7 +95,7 @@ export async function checkStartle(
 ): Promise<void> {
   try {
     if (!emotion || weight === "light") return;
-    const counts: Record<string, number> = {};
+    const counts: Record<string, number> = dict<number>();
     for (const token of emotion.split(",")) {
       const t = token.trim().toLowerCase();
       if (t) counts[t] = (counts[t] || 0) + 1;

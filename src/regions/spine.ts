@@ -22,6 +22,7 @@
  */
 
 import type { Env } from "../types";
+import { dict } from "../shared/dict";
 
 interface SpineRow {
   id: number;
@@ -83,7 +84,7 @@ export async function handleSpineRead(env: Env, params: Record<string, unknown>)
   }
 
   // Group by section family.
-  const byFamily: Record<string, SpineRow[]> = {};
+  const byFamily: Record<string, SpineRow[]> = dict<SpineRow[]>();
   for (const row of rows) {
     const fam = familyOf(row.section);
     if (!byFamily[fam]) byFamily[fam] = [];

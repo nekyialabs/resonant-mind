@@ -20,6 +20,7 @@
 import type { Env } from "../types";
 import { getSubconsciousState } from "../daemon/state";
 import { somaticPhrase } from "../daemon/somatic";
+import { escapeLike } from "../shared/text";
 
 interface PersonRow {
   id: number;
@@ -99,8 +100,8 @@ export async function handleBondEnter(env: Env, params: Record<string, unknown>)
 
   if (!person) {
     person = (await env.DB.prepare(
-      `SELECT id, name, kind, salience FROM people WHERE name ILIKE $1 ORDER BY LENGTH(name) ASC LIMIT 1`
-    ).bind(`${name}%`).first()) as PersonRow | null;
+      `SELECT id, name, kind, salience FROM people WHERE name ILIKE $1 ESCAPE '\\' ORDER BY LENGTH(name) ASC LIMIT 1`
+    ).bind(`${escapeLike(name)}%`).first()) as PersonRow | null;
   }
 
   if (!person) {

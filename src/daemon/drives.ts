@@ -30,6 +30,7 @@ import {
   DRIVE_DEFAULT_BASELINE,
   DRIVE_DEFAULT_HALF_LIFE_HOURS,
 } from "../shared/constants";
+import { dict } from "../shared/dict";
 
 // ============================================================
 // TYPES
@@ -397,7 +398,7 @@ async function readLatestPulse(
   `).first();
   if (!row) return null;
   const raw = parseJson<Record<string, unknown>>(row.content, {});
-  const payload: Record<string, number> = {};
+  const payload: Record<string, number> = dict<number>();
   for (const [key, value] of Object.entries(raw)) {
     if (typeof value === 'number' && Number.isFinite(value)) payload[key] = clamp(value, -1, 1);
   }
@@ -427,7 +428,7 @@ export async function runDriveTick(
   // (a) Assemble the environment from the latest fresh normalized pulse, then
   // overwrite the mind's own affect/circadian organs so external input cannot
   // spoof them. An old pulse contributes nothing: silence, never guessed state.
-  const payload: Record<string, number> = {};
+  const payload: Record<string, number> = dict<number>();
   const pulse = await readLatestPulse(env);
   if (pulse) {
     const ageMin = (now.getTime() - pulse.at.getTime()) / 60000;

@@ -8,7 +8,19 @@ import { getEmbedding, imageUrl } from "../shared/mind-helpers";
 import { getImageEmbedding } from "../embeddings";
 import { normalizeText } from "../shared/text";
 import { R2_IMAGE_PATH_PREFIX } from "../shared/constants";
-import { decodeBase64Image, fetchRemoteImage, validateImageBytes } from "../shared/image-security";
+import { decodeBase64Image, fetchRemoteImage, ImageSizeLimitError, imageErrorMessage, validateImageBytes } from "../shared/image-security";
+import { clampLimit } from "../shared/limits";
+
+/**
+ * fetchRemoteImage throws its own messages for URL validation, redirects,
+ * status, size and timeout (all start with "source_url" or "Remote image");
+ * anything else is a lower-level network error and is not shown to the caller.
+ */
+function deliberateFetchMessage(e: unknown): string {
+  if (e instanceof ImageSizeLimitError) return e.message;
+  if (e instanceof Error && /^(source_url|Remote image)/.test(e.message)) return e.message;
+  return "the URL could not be fetched";
+}
 
 export async function handleMindStoreImage(env: Env, params: Record<string, unknown>): Promise<string> {
   const action = params.action as string;
@@ -43,13 +55,15 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
       try {
         rawBinary = await fetchRemoteImage(sourceUrl);
       } catch (e) {
-        return `Error: source_url fetch failed — ${e instanceof Error ? e.message : String(e).slice(0, 120)}`;
+        console.error("store_image source_url fetch failed", e);
+        return `Error: source_url fetch failed — ${deliberateFetchMessage(e)}`;
       }
     } else {
       try {
         rawBinary = decodeBase64Image(imageData!);
       } catch (e) {
-        return `Error: base64 decode failed — ${e instanceof Error ? e.message : "image_data is not valid base64"}`;
+        console.error("store_image base64 decode failed", e);
+        return `Error: base64 decode failed — ${imageErrorMessage(e, "image_data is not valid base64")}`;
       }
     }
 
@@ -57,7 +71,7 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
     try {
       imageFormat = validateImageBytes(rawBinary);
     } catch (error) {
-      return `Error: ${error instanceof Error ? error.message : "unsupported image bytes"}`;
+      return `Error: ${imageErrorMessage(error, "unsupported image bytes")}`;
     }
     const mimeType = imageFormat.mime;
 
@@ -141,7 +155,7 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
     const emotion = params.emotion as string;
     const weight = params.weight as string;
     const random = params.random as boolean;
-    const limit = (params.limit as number) || 5;
+    const limit = clampLimit(params.limit, 5);
 
     let query = `SELECT i.*, e.name as entity_name, e.entity_type FROM images i LEFT JOIN entities e ON i.entity_id = e.id WHERE 1=1`;
     const bindings: unknown[] = [];
@@ -183,7 +197,7 @@ export async function handleMindStoreImage(env: Env, params: Record<string, unkn
   // === SEARCH: Semantic image search via pgvector ===
   if (action === "search") {
     const query = params.query as string;
-    const limit = (params.limit as number) || 5;
+    const limit = clampLimit(params.limit, 5);
     if (!query) return "Error: query is required for image search.";
 
     const embedding = await getEmbedding(env, query);

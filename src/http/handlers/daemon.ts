@@ -31,6 +31,7 @@ export async function handleApiDream(request: Request, env: Env): Promise<Respon
     ).bind(outcome.dreamId).first();
     return jsonResponse({ status: "generated", regenerated: regen, dream });
   } catch (e) {
-    return jsonResponse({ status: "error", error: String(e) }, 500);
+    console.error("Dream generation failed", e);
+    return jsonResponse({ status: "error", error: "Dream generation failed" }, 500);
   }
 }

@@ -6,7 +6,7 @@
  * index.ts surface.
  */
 
-export const RESONANT_MIND_VERSION = "4.0.1";
+export const RESONANT_MIND_VERSION = "4.1.5";
 export const R2_IMAGE_PATH_PREFIX = "r2://images/";
 
 // Surface pool configuration

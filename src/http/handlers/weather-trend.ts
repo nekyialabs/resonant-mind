@@ -1,9 +1,10 @@
 // HTTP handler for /api/weather/trend — mood trend over N days (JSON).
 import { jsonResponse } from "../response";
 import type { Env } from "../../types";
+import { clampLimit } from "../../shared/limits";
 
 export async function handleApiWeatherTrend(request: Request, env: Env): Promise<Response> {
-  const days = parseInt(new URL(request.url).searchParams.get("days") || "7", 10);
+  const days = clampLimit(new URL(request.url).searchParams.get("days"), 7);
   const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
   const result = await env.DB.prepare(`

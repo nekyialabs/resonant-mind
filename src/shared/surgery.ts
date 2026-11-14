@@ -498,3 +498,93 @@ export async function mergeEntities(env: Env, fromId: number, intoId: number): P
     relationsMoved: Number(row.relations_moved),
   };
 }
+
+// ============================================================
+// updateEntity
+// ============================================================
+
+export interface EntityFieldUpdate {
+  name?: string;
+  entity_type?: string;
+  primary_context?: string;
+  salience?: string;
+}
+
+export type UpdateEntityResult =
+  | { status: "ok"; relationsUpdated: number }
+  | { status: "missing" }
+  | { status: "name-taken"; takenById: number | null };
+
+const ENTITY_COLUMNS = ["entity_type", "primary_context", "salience"] as const;
+
+export function isUniqueViolation(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "23505";
+}
+
+/**
+ * Rename-and-update for one entity. relations store entity NAMES, so a rename
+ * has to move them too. entities.name is UNIQUE: a name another entity holds
+ * is refused up front, and the entity row plus every relations rewrite run as
+ * ONE statement (data-modifying CTEs, atomic like MERGE_SQL), so a unique
+ * violation that slips past the check (a concurrent insert) changes nothing.
+ */
+export async function updateEntity(env: Env, entityId: number, fields: EntityFieldUpdate): Promise<UpdateEntityResult> {
+  const current = await env.DB.prepare(`SELECT id, name FROM entities WHERE id = ?`).bind(entityId).first();
+  if (!current) return { status: "missing" };
+
+  const oldName = current.name as string;
+  const renaming = typeof fields.name === "string" && fields.name !== oldName;
+
+  if (renaming) {
+    const taken = await env.DB.prepare(`SELECT id FROM entities WHERE name = ? AND id != ?`).bind(fields.name, entityId).first();
+    if (taken) return { status: "name-taken", takenById: Number(taken.id) };
+  }
+
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const column of ENTITY_COLUMNS) {
+    if (fields[column] !== undefined) {
+      sets.push(`${column} = ?`);
+      values.push(fields[column]);
+    }
+  }
+  if (!renaming && sets.length === 0) return { status: "ok", relationsUpdated: 0 };
+
+  try {
+    if (!renaming) {
+      await env.DB.prepare(
+        `UPDATE entities SET ${sets.join(", ")}, updated_at = datetime('now') WHERE id = ?`
+      ).bind(...values, entityId).run();
+      return { status: "ok", relationsUpdated: 0 };
+    }
+
+    const row = await env.DB.prepare(`
+WITH p AS (
+  SELECT ?::int AS id, ?::text AS old_name, ?::text AS new_name
+), rels AS (
+  UPDATE relations r
+     SET from_entity = CASE WHEN r.from_entity = p.old_name THEN p.new_name ELSE r.from_entity END,
+         to_entity   = CASE WHEN r.to_entity   = p.old_name THEN p.new_name ELSE r.to_entity END
+    FROM p
+   WHERE r.from_entity = p.old_name OR r.to_entity = p.old_name
+  RETURNING r.id
+), ent AS (
+  UPDATE entities e
+     SET name = p.new_name${sets.map((s) => `, ${s}`).join("")}, updated_at = datetime('now')
+    FROM p
+   WHERE e.id = p.id
+  RETURNING e.id
+)
+SELECT (SELECT count(*) FROM rels)::int AS relations_updated,
+       (SELECT count(*) FROM ent)::int AS entities_updated`
+    ).bind(entityId, oldName, fields.name, ...values).first();
+
+    if (!row || Number(row.entities_updated) !== 1) {
+      throw new Error(`rename of entity #${entityId} did not update the entity; it may have been removed concurrently`);
+    }
+    return { status: "ok", relationsUpdated: Number(row.relations_updated) };
+  } catch (error) {
+    if (isUniqueViolation(error)) return { status: "name-taken", takenById: null };
+    throw error;
+  }
+}

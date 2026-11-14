@@ -3,6 +3,7 @@ import { jsonResponse } from "../response";
 import { getEmbedding } from "../../shared/mind-helpers";
 import { rescueObservation } from "../../shared/archive-observation";
 import type { Env } from "../../types";
+import { clampLimit, clampOffset } from "../../shared/limits";
 
 export async function handleApiArchive(request: Request, env: Env, pathParts: string[]): Promise<Response> {
   const id = pathParts[2] ? parseInt(pathParts[2]) : null;
@@ -11,8 +12,8 @@ export async function handleApiArchive(request: Request, env: Env, pathParts: st
   // GET /api/archive - list archived observations
   if (request.method === "GET" && !id && action !== "search") {
     const url = new URL(request.url);
-    const limit = parseInt(url.searchParams.get("limit") || "50");
-    const offset = parseInt(url.searchParams.get("offset") || "0");
+    const limit = clampLimit(url.searchParams.get("limit"), 50);
+    const offset = clampOffset(url.searchParams.get("offset"));
 
     const results = await env.DB.prepare(`
       SELECT o.*, e.name as entity_name, e.entity_type

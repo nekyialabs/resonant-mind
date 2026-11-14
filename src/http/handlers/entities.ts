@@ -1,7 +1,9 @@
 // HTTP handler for /api/entities — extracted from src/index.ts.
 import { jsonResponse } from "../response";
-import { deleteEntity, mergeEntities } from "../../shared/surgery";
+import { deleteEntity, mergeEntities, updateEntity, type EntityFieldUpdate } from "../../shared/surgery";
 import type { Env } from "../../types";
+
+const ENTITY_SALIENCE = ["foundational", "active", "background", "archive"];
 
 export async function handleApiEntities(request: Request, env: Env, pathParts: string[]): Promise<Response> {
   const method = request.method;
@@ -44,47 +46,6 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
     return jsonResponse({ ...entity, observations: observations.results, relations: relations.results });
   }
 
-  // POST /api/entities - create
-  if (method === "POST") {
-    const body = await request.json() as Record<string, unknown>;
-    const result = await env.DB.prepare(
-      "INSERT INTO entities (name, entity_type, primary_context) VALUES (?, ?, ?)"
-    ).bind(body.name, body.entity_type || "concept", body.context || "default").run();
-    return jsonResponse({ id: result.meta.last_row_id, ...body }, 201);
-  }
-
-  // PUT /api/entities/:id - update (handles partial updates)
-  if (method === "PUT" && entityId) {
-    const body = await request.json() as Record<string, unknown>;
-
-    // Get current entity
-    const current = await env.DB.prepare("SELECT id, name, entity_type, primary_context, salience, created_at, updated_at FROM entities WHERE id = ?").bind(entityId).first();
-    if (!current) return jsonResponse({ error: "Not found" }, 404);
-
-    // Build dynamic update
-    const updates: string[] = [];
-    const values: unknown[] = [];
-
-    if (body.name !== undefined) { updates.push("name = ?"); values.push(body.name); }
-    if (body.entity_type !== undefined) { updates.push("entity_type = ?"); values.push(body.entity_type); }
-    if (body.context !== undefined) { updates.push("primary_context = ?"); values.push(body.context); }
-    if (body.salience !== undefined) { updates.push("salience = ?"); values.push(body.salience); }
-
-    if (updates.length > 0) {
-      updates.push("updated_at = datetime('now')");
-      values.push(entityId);
-      await env.DB.prepare(`UPDATE entities SET ${updates.join(", ")} WHERE id = ?`).bind(...values).run();
-
-      // Update relations if name changed
-      if (body.name && body.name !== current.name) {
-        await env.DB.prepare("UPDATE relations SET from_entity = ? WHERE from_entity = ?").bind(body.name, current.name).run();
-        await env.DB.prepare("UPDATE relations SET to_entity = ? WHERE to_entity = ?").bind(body.name, current.name).run();
-      }
-    }
-
-    return jsonResponse({ id: entityId, ...body });
-  }
-
   // POST /api/entities/merge - merge two entities
   if (method === "POST" && pathParts[2] === "merge") {
     const body = await request.json() as Record<string, unknown>;
@@ -104,7 +65,8 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
     try {
       result = await mergeEntities(env, mergeFromId, mergeIntoId);
     } catch (e) {
-      return jsonResponse({ error: `Merge failed and was not applied: ${e instanceof Error ? e.message : String(e)}` }, 500);
+      console.error("Entity merge failed", e);
+      return jsonResponse({ error: "Merge failed and was not applied" }, 500);
     }
     if (result.missing === "from") return jsonResponse({ error: "Source entity not found" }, 404);
     if (result.missing === "into") return jsonResponse({ error: "Target entity not found" }, 404);
@@ -115,6 +77,53 @@ export async function handleApiEntities(request: Request, env: Env, pathParts: s
       merged_into: result.intoName,
       observations_moved: result.observationsMoved
     });
+  }
+
+  // POST /api/entities - create
+  if (method === "POST") {
+    const body = await request.json() as Record<string, unknown>;
+    const result = await env.DB.prepare(
+      "INSERT INTO entities (name, entity_type, primary_context) VALUES (?, ?, ?)"
+    ).bind(body.name, body.entity_type || "concept", body.context || "default").run();
+    return jsonResponse({ id: result.meta.last_row_id, ...body }, 201);
+  }
+
+  // PUT /api/entities/:id - update (handles partial updates)
+  if (method === "PUT" && entityId) {
+    const body = await request.json() as Record<string, unknown>;
+
+    const current = await env.DB.prepare("SELECT id FROM entities WHERE id = ?").bind(entityId).first();
+    if (!current) return jsonResponse({ error: "Not found" }, 404);
+
+    const isText = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
+    const fields: EntityFieldUpdate = {};
+    if (body.name !== undefined) {
+      if (!isText(body.name)) return jsonResponse({ error: "name must be a non-empty string" }, 400);
+      fields.name = body.name.trim();
+    }
+    if (body.entity_type !== undefined) {
+      if (!isText(body.entity_type)) return jsonResponse({ error: "entity_type must be a non-empty string" }, 400);
+      fields.entity_type = body.entity_type;
+    }
+    if (body.context !== undefined) {
+      if (!isText(body.context)) return jsonResponse({ error: "context must be a non-empty string" }, 400);
+      fields.primary_context = body.context;
+    }
+    if (body.salience !== undefined) {
+      if (!isText(body.salience) || !ENTITY_SALIENCE.includes(body.salience)) {
+        return jsonResponse({ error: `salience must be one of: ${ENTITY_SALIENCE.join(", ")}` }, 400);
+      }
+      fields.salience = body.salience;
+    }
+
+    // One atomic statement: the entity row and the relations that name it.
+    const outcome = await updateEntity(env, entityId, fields);
+    if (outcome.status === "missing") return jsonResponse({ error: "Not found" }, 404);
+    if (outcome.status === "name-taken") {
+      return jsonResponse({ error: "Another entity already has that name. Merge them instead of renaming.", conflicting_entity_id: outcome.takenById }, 409);
+    }
+
+    return jsonResponse({ id: entityId, ...body, ...(fields.name !== undefined ? { name: fields.name } : {}) });
   }
 
   // DELETE /api/entities/:id - delete

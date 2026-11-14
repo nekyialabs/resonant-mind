@@ -21,3 +21,11 @@ export function generateId(prefix: string): string {
   const random = Math.random().toString(36).slice(2, 6);
   return `${prefix}-${timestamp}-${random}`;
 }
+
+/**
+ * Escape `%`, `_` and `\` so a caller-supplied string matches literally inside
+ * a LIKE pattern. Pair the pattern with `ESCAPE '\'` in the SQL.
+ */
+export function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
+}

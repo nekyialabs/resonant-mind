@@ -5,11 +5,12 @@
 
 import type { Env } from "../types";
 import { recordAccessTracking } from "../daemon/state";
+import { clampLimit } from "../shared/limits";
 
 export async function handleMindRead(env: Env, params: Record<string, unknown>): Promise<string> {
   const scope = (params.scope as string) || "all";
   const context = (params.context as string) || "default";
-  const hours = (params.hours as number) || 24;
+  const hours = clampLimit(params.hours, 24, 8760);
 
   try {
     if (scope === "all") {
@@ -196,6 +197,7 @@ export async function handleMindRead(env: Env, params: Record<string, unknown>):
 
     return JSON.stringify({ error: `Invalid scope '${scope}'. Must be: all, context, recent, observation` });
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("mind_read failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

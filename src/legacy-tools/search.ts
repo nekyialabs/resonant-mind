@@ -13,10 +13,12 @@ import type { Env } from "../types";
 import { getEmbedding, searchVectors, imageUrl } from "../shared/mind-helpers";
 import { getSubconsciousState, recordAccessTracking } from "../daemon/state";
 import { SEARCH_SCORING, RECENCY_DECAY_RATE, ACCESS_GROWTH_RATE } from "../shared/constants";
+import { clampLimit } from "../shared/limits";
+import { escapeLike } from "../shared/text";
 
 export async function handleMindSearch(env: Env, params: Record<string, unknown>): Promise<string> {
   const query = params.query as string;
-  const n_results = Number(params.n_results) || 10;
+  const n_results = clampLimit(params.n_results, 10);
 
   // Filter parameters
   const filterKeyword = params.keyword as string | undefined;
@@ -62,12 +64,12 @@ export async function handleMindSearch(env: Env, params: Record<string, unknown>
     const textResults = await env.DB.prepare(
       `SELECT 'entity' as source, name as title, content
        FROM entities e JOIN observations o ON e.id = o.entity_id
-       WHERE o.content LIKE ?
+       WHERE o.content LIKE ? ESCAPE '\\'
        UNION ALL
        SELECT 'journal' as source, entry_date as title, content
-       FROM journals WHERE content LIKE ?
+       FROM journals WHERE content LIKE ? ESCAPE '\\'
        LIMIT ?`
-    ).bind(`%${query}%`, `%${query}%`, n_results).all();
+    ).bind(`%${escapeLike(query)}%`, `%${escapeLike(query)}%`, n_results).all();
 
     if (!textResults.results?.length) {
       return "No results found.";

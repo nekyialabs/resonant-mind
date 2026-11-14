@@ -5,9 +5,11 @@
 
 import type { Env } from "../types";
 import { getSubconsciousState } from "../daemon/state";
+import { clampLimit } from "../shared/limits";
+import { dict } from "../shared/dict";
 
 export async function handleMindPatterns(env: Env, params: Record<string, unknown>): Promise<string> {
-  const days = (params.days as number) || 7;
+  const days = clampLimit(params.days, 7);
   const includeAllTime = (params.include_all_time as boolean) !== false;
 
   try {
@@ -51,7 +53,7 @@ export async function handleMindPatterns(env: Env, params: Record<string, unknow
       `SELECT salience, COUNT(*) as count FROM observations GROUP BY salience`
     ).all();
 
-    const salienceMap: Record<string, number> = {};
+    const salienceMap: Record<string, number> = dict<number>();
     for (const row of salience.results || []) {
       salienceMap[row.salience as string || 'unset'] = row.count as number;
     }
@@ -153,7 +155,7 @@ export async function handleMindPatterns(env: Env, params: Record<string, unknow
         output.push("FOUNDATIONAL CORE");
         output.push("-".repeat(60));
         // Group by primary context
-        const byContext: Record<string, string[]> = {};
+        const byContext: Record<string, string[]> = dict<string[]>();
         for (const entity of foundational.results) {
           const ctx = (entity.primary_context as string) || 'default';
           if (!byContext[ctx]) byContext[ctx] = [];
@@ -173,6 +175,7 @@ export async function handleMindPatterns(env: Env, params: Record<string, unknow
 
     return output.join("\n");
   } catch (error) {
-    return JSON.stringify({ error: String(error) });
+    console.error("mind_patterns failed", error);
+    return JSON.stringify({ error: "Internal error" });
   }
 }

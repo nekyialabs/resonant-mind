@@ -11,7 +11,7 @@
 
 import type { Env } from "../types";
 import { getEmbedding } from "../shared/mind-helpers";
-import { mergeEntities } from "../shared/surgery";
+import { mergeEntities, updateEntity, type EntityFieldUpdate } from "../shared/surgery";
 
 export async function handleMindEntity(env: Env, params: Record<string, unknown>): Promise<string> {
   const action = params.action as string;
@@ -58,44 +58,32 @@ export async function handleMindEntity(env: Env, params: Record<string, unknown>
       const newType = params.new_type as string;
       const newContext = params.new_context as string;
 
-      const updates: string[] = [];
-      const values: unknown[] = [];
+      const fields: EntityFieldUpdate = {};
       const changes: string[] = [];
 
       if (newName && newName !== entity.name) {
-        updates.push("name = ?");
-        values.push(newName);
+        fields.name = newName;
         changes.push(`name: ${entity.name} → ${newName}`);
-
-        // Update relations that reference this entity by name
-        await env.DB.prepare(
-          `UPDATE relations SET from_entity = ? WHERE from_entity = ?`
-        ).bind(newName, entity.name).run();
-        await env.DB.prepare(
-          `UPDATE relations SET to_entity = ? WHERE to_entity = ?`
-        ).bind(newName, entity.name).run();
       }
       if (newType && newType !== entity.entity_type) {
-        updates.push("entity_type = ?");
-        values.push(newType);
+        fields.entity_type = newType;
         changes.push(`type: ${entity.entity_type} → ${newType}`);
       }
       if (newContext && newContext !== entity.primary_context) {
-        updates.push("primary_context = ?");
-        values.push(newContext);
+        fields.primary_context = newContext;
         changes.push(`primary_context: ${entity.primary_context} → ${newContext}`);
       }
 
-      if (updates.length === 0) {
+      if (changes.length === 0) {
         return "No changes provided";
       }
 
-      updates.push("updated_at = datetime('now')");
-      values.push(entity.id);
-
-      await env.DB.prepare(
-        `UPDATE entities SET ${updates.join(", ")} WHERE id = ?`
-      ).bind(...values).run();
+      // One atomic statement: the entity row and the relations that name it.
+      const outcome = await updateEntity(env, entity.id, fields);
+      if (outcome.status === "missing") return "Entity not found";
+      if (outcome.status === "name-taken") {
+        return `Cannot rename '${entity.name}' to '${newName}': another entity already has that name. Use action 'merge' to combine them. Nothing was changed.`;
+      }
 
       // Re-vectorize the entity with updated info
       try {
@@ -136,7 +124,8 @@ export async function handleMindEntity(env: Env, params: Record<string, unknown>
       try {
         result = await mergeEntities(env, mergeFromId, mergeIntoId);
       } catch (e) {
-        return `Merge of #${mergeFromId} into #${mergeIntoId} failed and was not applied: ${e instanceof Error ? e.message : String(e)}`;
+        console.error(`Merge of #${mergeFromId} into #${mergeIntoId} failed`, e);
+        return `Merge of #${mergeFromId} into #${mergeIntoId} failed and was not applied`;
       }
       if (result.refused === "same-entity") return `Cannot merge entity #${mergeFromId} into itself`;
       if (result.missing === "from") return `Source entity #${mergeFromId} not found`;
@@ -146,13 +135,18 @@ export async function handleMindEntity(env: Env, params: Record<string, unknown>
     }
 
     case "archive_old": {
-      const olderThanDays = (params.older_than_days as number) || 30;
+      const rawDays = params.older_than_days;
+      const olderThanDays = rawDays === undefined || rawDays === null ? 30 : rawDays;
+      if (typeof olderThanDays !== "number" || !Number.isInteger(olderThanDays) || olderThanDays < 1) {
+        return "older_than_days must be a whole number of days, 1 or more";
+      }
       const typeFilter = params.entity_type_filter as string;
 
       const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
 
       let query = `UPDATE entities SET salience = 'archive', updated_at = datetime('now')
                    WHERE salience != 'foundational' AND salience != 'archive'
+                   AND entity_type != 'self'
                    AND updated_at < ?`;
       const bindings: unknown[] = [cutoff];
 

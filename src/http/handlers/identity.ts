@@ -1,6 +1,7 @@
 // HTTP handler for /api/identity — extracted from src/index.ts.
 import { jsonResponse } from "../response";
 import type { Env } from "../../types";
+import { dict } from "../../shared/dict";
 
 export async function handleApiIdentity(request: Request, env: Env, pathParts: string[]): Promise<Response> {
   const method = request.method;
@@ -13,7 +14,7 @@ export async function handleApiIdentity(request: Request, env: Env, pathParts: s
     ).all();
 
     // Build tree structure from dot-notation sections
-    const tree: Record<string, unknown[]> = {};
+    const tree: Record<string, unknown[]> = dict<unknown[]>();
     for (const row of results.results || []) {
       const r = row as { section: string; [k: string]: unknown };
       const parts = r.section.split('.');

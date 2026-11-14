@@ -5,6 +5,7 @@
 import { jsonResponse } from "../response";
 import { getSubconsciousState } from "../../daemon/state";
 import type { Env } from "../../types";
+import { escapeLike } from "../../shared/text";
 
 type WarmthRow = { id: number; state: string; days_since: number | null; last_observed_at: string | null };
 
@@ -57,9 +58,9 @@ async function handleAllBonds(env: Env): Promise<Response> {
 async function handleSingleBond(env: Env, name: string): Promise<Response> {
   const person = (await env.DB.prepare(
     `SELECT id, name, kind, salience, primary_context FROM people
-     WHERE name = $1 OR name ILIKE $2
+     WHERE name = $1 OR name ILIKE $2 ESCAPE '\\'
      ORDER BY (name = $1) DESC, LENGTH(name) ASC LIMIT 1`
-  ).bind(name, `${name}%`).first()) as Record<string, unknown> | null;
+  ).bind(name, `${escapeLike(name)}%`).first()) as Record<string, unknown> | null;
 
   if (!person) return jsonResponse({ error: `No bond matched '${name}'` }, 404);
 
