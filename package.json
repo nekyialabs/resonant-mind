@@ -19,6 +19,7 @@
     "scan:release": "node scripts/scan-release.mjs",
     "check:merge-damage": "node scripts/check-merge-damage.mjs",
     "check:sequences": "node scripts/check-sequences.mjs",
+    "check:supersede": "node scripts/check-supersede.mjs",
     "repair:merge-vectors": "node scripts/repair-merge-vectors.mjs",
     "db:migrate": "node scripts/migrate-postgres.mjs",
     "migrate:v32": "node scripts/v32-to-v4/cli.mjs",

@@ -36,4 +36,5 @@ crons = ["*/30 * * * *"]
 # WORKER_URL              - public worker origin, required for signed images
 # LOCATION_NAME           - WeatherAPI-compatible location query
 # LOCATION_TIMEZONE       - IANA timezone for deployment-specific scheduling
+# AUTO_SUPERSEDE          - similarity (above 0, up to 1) for retiring older observations; "off" disables; default 0.85
 # DASHBOARD_ALLOWED_ORIGIN - explicit CORS origin for a future separate client
