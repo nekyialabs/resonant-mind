@@ -40,10 +40,19 @@ const TARGET_ENUM_ALIASES = new Map([
   ['threads.priority', new Set(['low', 'medium', 'high', 'urgent', 'critical', 'normal'])],
   ['relational_state.intensity', new Set(['whisper', 'present', 'strong', 'overwhelming', 'high'])],
 ]);
-const JSON_SHAPES = new Map([
+// The one column -> shape table and the one shape test. The decision draft, the value map and the
+// validator's column comparison all use these, so what counts as "needs a reviewed choice" cannot drift.
+export const JSON_SHAPES = new Map([
   ['links', 'array'], ['connections', 'array'], ['tags', 'array'], ['source_observation_ids', 'integer-array'],
   ['data', 'object'], ['sit_notes', 'array-or-object'],
 ]);
+/** Does an already-parsed JSON value have the shape the column expects? */
+export function jsonShapeValid(parsed, shape) {
+  if (shape === 'array') return Array.isArray(parsed);
+  if (shape === 'integer-array') return Array.isArray(parsed) && parsed.every((item) => Number.isSafeInteger(typeof item === 'number' ? item : Number(item)));
+  if (shape === 'object') return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
+  return Array.isArray(parsed) || (parsed !== null && typeof parsed === 'object');
+}
 // Every v3.2 column that holds a point in time. This is the single list: the decision draft uses it to
 // find ambiguous values and the value map uses it to normalize them, and a test checks it against both
 // exact source specs, so a column cannot be listed in one place and missed in the other.
@@ -138,10 +147,7 @@ function dateAmbiguity(value) {
 function shapeOk(value, shape) {
   let parsed = value;
   if (typeof value === 'string') { try { parsed = JSON.parse(value); } catch { return false; } if (!jsonSurvivesParsing(value)) return false; }
-  if (shape === 'array') return Array.isArray(parsed);
-  if (shape === 'integer-array') return Array.isArray(parsed) && parsed.every((item) => Number.isSafeInteger(typeof item === 'number' ? item : Number(item)));
-  if (shape === 'object') return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
-  return Array.isArray(parsed) || (parsed !== null && typeof parsed === 'object');
+  return jsonShapeValid(parsed, shape);
 }
 function itemForUnknown(table, row, index, field, value, reason, choices = ['map', 'exclude-row']) {
   return makeItem('unknown-value', table, row, index, reason, choices, { field, observed_value_sha256: sha256Hex(String(value)) });
