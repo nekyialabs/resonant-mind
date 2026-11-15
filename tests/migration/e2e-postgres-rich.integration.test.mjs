@@ -124,6 +124,13 @@ describe.skipIf(!runE2E)('real PostgreSQL v3.2 with every table populated to fre
       const imported = await importPlan({ client: targetClient, plan, dryRun, targetIdentity: target, stagingSchema: prepared.schema });
       expect(imported.receipt_sha256).toMatch(/^[0-9a-f]{64}$/u);
 
+      // Every serial id sequence is ahead of its data after import (issue #26: relations and consolidation_groups were left at 1).
+      for (const table of ['relations', 'consolidation_groups']) {
+        const state = await targetClient.query(`SELECT (SELECT max(id) FROM public.${table})::bigint AS max_id, (SELECT CASE WHEN is_called THEN last_value + 1 ELSE last_value END FROM public.${table}_id_seq)::bigint AS next_id`);
+        expect(state.rows[0].max_id, `${table} has rows to compare`).not.toBeNull();
+        expect(BigInt(state.rows[0].next_id)).toBeGreaterThan(BigInt(state.rows[0].max_id));
+      }
+
       // What the target holds, compared with what the source held. Both sides are read with the same
       // SQL shape and every timestamp is printed in UTC to the microsecond, so a lost digit, a shifted
       // offset or a changed value is a failure, not a rounding.

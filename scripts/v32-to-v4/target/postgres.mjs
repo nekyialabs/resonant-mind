@@ -18,7 +18,38 @@ const REFERENCES = Object.freeze({
   daemon_proposals: { from_obs_id: ['observations'], to_obs_id: ['observations'], from_entity_id: ['entities'], to_entity_id: ['entities'] },
   thread_entities: { thread_id: ['threads'], entity_id: ['entities'] },
 });
-export const SERIAL_TABLES = new Set(['entities', 'people', 'nodes', 'observations', 'observation_versions', 'relational_state', 'identity', 'journals', 'images', 'subconscious', 'daemon_proposals', 'orphan_observations', 'co_surfacing']);
+// The tables of IMPORT_ORDER whose `id` is a serial (default nextval(...)) in migrations/postgres. people and nodes are not here: their
+// ids are copied from entities and have no sequence. This list is a cross-check, not the authority: the set that is actually reset and
+// validated is read from the target's catalog (readSerialTables), and a disagreement between the two is a refusal, so a table added to
+// the schema or to this list alone cannot silently go without its sequence reset (issue #26: relations, consolidation_groups).
+export const SERIAL_TABLES = new Set(['entities', 'observations', 'observation_versions', 'relations', 'consolidation_groups', 'relational_state', 'identity', 'journals', 'images', 'subconscious', 'daemon_proposals', 'orphan_observations', 'co_surfacing']);
+
+const SERIAL_CATALOG_QUERY = `
+  SELECT c.relname::text AS table_name,
+         COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid) LIKE 'nextval(%', false) AS serial
+  FROM pg_catalog.pg_class c
+  JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attname = 'id' AND NOT a.attisdropped
+  LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+  WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relname = ANY($1::text[])
+`;
+/**
+ * Pure reconciliation of the catalog's answer with the static list. `rows` are { table_name, serial } for the IMPORT_ORDER tables that
+ * exist and have an id column. Returns the set of serial tables, or refuses when the catalog and the list disagree.
+ */
+export function reconcileSerialTables(rows, expected = SERIAL_TABLES) {
+  const catalog = new Set(rows.filter((row) => row.serial === true).map((row) => row.table_name));
+  const present = new Set(rows.map((row) => row.table_name));
+  const notListed = [...catalog].filter((table) => !expected.has(table)).sort();
+  const notSerial = [...expected].filter((table) => present.has(table) && !catalog.has(table)).sort();
+  if (notListed.length || notSerial.length) throw refusal('RMIG-E-TARGET-SCHEMA', 'import', 'The target schema and the migrator disagree about which tables have a serial id, so id sequences cannot be reset or checked safely.', { serial_in_target_not_in_migrator: notListed, in_migrator_not_serial_in_target: notSerial });
+  return catalog;
+}
+/** The IMPORT_ORDER tables whose id has a sequence in this target, read from the catalog and cross-checked against SERIAL_TABLES. */
+export async function readSerialTables(client) {
+  const result = await query(client, SERIAL_CATALOG_QUERY, [[...IMPORT_ORDER]]);
+  return reconcileSerialTables(result.rows ?? []);
+}
 
 function quoteIdentifier(value) { if (typeof value !== 'string' || !IDENTIFIER.test(value)) throw new TypeError('PostgreSQL identifier is not allowlisted.'); return `"${value}"`; }
 function qtable(schema, table) { return `${quoteIdentifier(schema)}.${quoteIdentifier(table)}`; }
@@ -339,8 +370,8 @@ async function insertRows(client, table, rows) {
   for (const item of deferred) await query(client, `UPDATE public.${quoteIdentifier(table)} SET ${quoteIdentifier(item.field)} = $1 WHERE id = $2`, [item.value, item.id]);
   return rows.length;
 }
-export async function resetSequence(client, table) {
-  if (!SERIAL_TABLES.has(table)) return;
+export async function resetSequence(client, table, serialTables = undefined) {
+  if (serialTables !== undefined && !serialTables.has(table)) return; // the set comes from the catalog; without one, pg_get_serial_sequence below decides
   const sequence = await query(client, `
     SELECT n.nspname AS schema_name, c.relname AS sequence_name
     FROM pg_catalog.pg_class c
@@ -420,10 +451,11 @@ export async function importPlan({ client, plan, dryRun, targetIdentity, staging
     if (stagedPlan.plan_sha256 !== row.plan_sha256) throw refusal('RMIG-E-RECEIPT-MISMATCH', 'import', 'Staged plan hash does not match run metadata.');
     compatibilityCheck(members);
     let inserted = 0;
+    const serialTables = await readSerialTables(client); // refuses before any row is written if the catalog and the migrator disagree
     for (const table of IMPORT_ORDER) {
       if (table === 'people' || table === 'nodes') continue;
       inserted += await insertRows(client, table, members[table] ?? []);
-      await resetSequence(client, table);
+      await resetSequence(client, table, serialTables);
       if (injectFailureAfter !== undefined && inserted >= injectFailureAfter) throw new Error('injected import failure for rollback proof');
     }
     const importReceipt = buildImportReceipt({ plan, dryRun, targetIdentity, insertedRows: inserted });

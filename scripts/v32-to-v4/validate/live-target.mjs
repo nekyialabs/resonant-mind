@@ -11,7 +11,7 @@
 import { parseInstantMicros } from '../lib/instant.mjs';
 import { MigrationRefusal } from '../lib/refusal.mjs';
 import { SOURCE_SESSION_SETTINGS } from '../source/postgres-v32.mjs';
-import { SERIAL_TABLES, ledgerBinding, readIdentityInTransaction } from '../target/postgres.mjs';
+import { readSerialTables, ledgerBinding, readIdentityInTransaction } from '../target/postgres.mjs';
 import { COMPARED_TARGET_TABLES } from './compare.mjs';
 import { CHECKS_QUERY, classifyChecks, loadExpectedChecks } from '../spec/v4-checks.mjs';
 
@@ -127,7 +127,7 @@ export async function readLiveTarget({ client, migrationId, findings }) {
 
     // Sequences: the next value of every serial id must be beyond the largest id stored.
     const sequences = [];
-    for (const table of SERIAL_TABLES) {
+    for (const table of await readSerialTables(client)) { // from the target's catalog, cross-checked against the migrator's list (refuses on a disagreement)
       if (!columnTypes[table]?.id) continue;
       const name = (await client.query("SELECT pg_catalog.pg_get_serial_sequence($1, 'id') AS name", [`public.${table}`])).rows[0]?.name;
       if (!name) continue;
