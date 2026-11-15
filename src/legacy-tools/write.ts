@@ -7,7 +7,7 @@
 import type { Env } from "../types";
 import { getEmbedding } from "../shared/mind-helpers";
 import { normalizeText } from "../shared/text";
-import { CONTRADICTION_SIMILARITY_THRESHOLD, AUTO_SUPERSEDE_MAX_CHARS } from "../shared/constants";
+import { CONTRADICTION_SIMILARITY_THRESHOLD, AUTO_SUPERSEDE_MAX_CHARS, PROPOSAL_PENDING_CAP } from "../shared/constants";
 import { resolveAutoSupersede, retireObservation } from "../shared/supersede";
 import { checkStartle } from "../daemon/somatic";
 
@@ -256,6 +256,16 @@ async function proposeSupersede(
 ): Promise<boolean> {
   const reason = `Possible supersede (${Math.round(similarity * 100)}% similar): #${newId} (${newLength} chars) may replace #${oldId} (${oldLength} chars). Both are long, so #${oldId} was left in place.`;
   try {
+    // Same backpressure as the daemon's generators: a queue at the cap gets no
+    // more. Nothing is lost: the long pair simply stays as it is, unretired.
+    const pendingRow = await env.DB.prepare(
+      `SELECT COUNT(*) as count FROM daemon_proposals WHERE status = 'pending'`
+    ).first().catch(() => null);
+    const pending = Number(pendingRow?.count ?? 0);
+    if (pending >= PROPOSAL_PENDING_CAP) {
+      console.log(`[mind_write] supersede proposal for obs ${oldId} -> ${newId} not recorded — ${pending} pending >= cap ${PROPOSAL_PENDING_CAP}; both observations left in place`);
+      return false;
+    }
     await env.DB.prepare(`
       INSERT INTO daemon_proposals
       (proposal_type, from_obs_id, to_obs_id, from_entity_id, to_entity_id, reason, confidence)

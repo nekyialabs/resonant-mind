@@ -11,7 +11,7 @@ vi.mock('../src/daemon/somatic', () => ({
 import { handleMindWrite } from '../src/legacy-tools/write';
 import { handleMindProposals } from '../src/legacy-tools/proposals';
 import { resolveAutoSupersede } from '../src/shared/supersede';
-import { AUTO_SUPERSEDE_MAX_CHARS, AUTO_SUPERSEDE_THRESHOLD } from '../src/shared/constants';
+import { AUTO_SUPERSEDE_MAX_CHARS, AUTO_SUPERSEDE_THRESHOLD, PROPOSAL_PENDING_CAP } from '../src/shared/constants';
 
 const NEW_ID = 100;
 const OLD_ID = 5;
@@ -20,7 +20,7 @@ const ENTITY_ID = 1;
 interface Call { sql: string; binds: unknown[] }
 
 /** A fake env: one entity, one active old observation, one vector match for it. */
-function writeEnv(opts: { oldContent: string; score: number; autoSupersede?: string }) {
+function writeEnv(opts: { oldContent: string; score: number; autoSupersede?: string; pending?: number }) {
   const calls: Call[] = [];
   const query = vi.fn(async () => ({
     matches: [{
@@ -37,6 +37,7 @@ function writeEnv(opts: { oldContent: string; score: number; autoSupersede?: str
         bind(...args: unknown[]) { call.binds = args; return statement; },
         first: async () => {
           if (/FROM entities WHERE name/.test(sql)) return { id: ENTITY_ID };
+          if (/COUNT\(\*\) as count FROM daemon_proposals/.test(sql)) return { count: opts.pending ?? 0 };
           if (/SELECT id, content FROM observations WHERE id = \?/.test(sql)) return { id: OLD_ID, content: opts.oldContent };
           return null;
         },
@@ -134,6 +135,21 @@ describe('auto-supersede: short facts only', () => {
     const { env, calls } = writeEnv({ oldContent: LONG, score: 0.82 });
     await write(env, LONG);
     expect(proposalCall(calls)).toBeUndefined();
+  });
+
+  it('at the pending cap: no proposal, nothing retired, nothing claimed, one log line', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const { env, calls } = writeEnv({ oldContent: LONG, score: 0.93, pending: PROPOSAL_PENDING_CAP });
+    const msg = await write(env, LONG);
+    expect(proposalCall(calls)).toBeUndefined();
+    expect(retireCall(calls)).toBeUndefined();
+    expect(msg).not.toContain('ritual_tend');
+    expect(msg).not.toContain('Superseded');
+    expect(log.mock.calls.filter((c) => String(c[0]).includes('cap'))).toHaveLength(1);
+
+    const under = writeEnv({ oldContent: LONG, score: 0.93, pending: PROPOSAL_PENDING_CAP - 1 });
+    await write(under.env, LONG);
+    expect(proposalCall(under.calls)).toBeDefined();
   });
 
   it('still writes the observation when the proposal cannot be recorded', async () => {
