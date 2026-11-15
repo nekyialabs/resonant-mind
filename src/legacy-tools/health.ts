@@ -26,7 +26,9 @@ export async function handleMindHealth(env: Env): Promise<string> {
     // Reshape Phase B
     spineCount, compassCount, compassEdges, compassByKind, compassExercised30d,
     // Reshape Phase H+
-    graphStats
+    graphStats,
+    // Superseded observations (hidden from mind_search unless include_expired)
+    supersededTotal, supersededRecent
   ] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) as c FROM entities`).first(),
     env.DB.prepare(`SELECT COUNT(*) as c FROM observations`).first(),
@@ -80,7 +82,9 @@ export async function handleMindHealth(env: Env): Promise<string> {
         ROUND(AVG(rel_count)::numeric, 2) AS avg_degree,
         MAX(rel_count) AS max_degree
       FROM entity_stats
-    `).first().catch(() => null)
+    `).first().catch(() => null),
+    env.DB.prepare(`SELECT COUNT(*) as c FROM observations WHERE superseded_by IS NOT NULL`).first().catch(() => ({ c: 0 })),
+    env.DB.prepare(`SELECT COUNT(*) as c FROM observations WHERE superseded_by IS NOT NULL AND valid_until > ?`).bind(sevenDaysAgo).first().catch(() => ({ c: 0 }))
   ]);
 
   const entities = entityCount?.c as number || 0;
@@ -102,6 +106,8 @@ export async function handleMindHealth(env: Env): Promise<string> {
   const pendingProposals = (proposalCount as Record<string, unknown>)?.c as number || 0;
   const orphans = (orphanCount as Record<string, unknown>)?.c as number || 0;
   const archivedObs = (archivedObsCount as Record<string, unknown>)?.c as number || 0;
+  const superseded = Number((supersededTotal as Record<string, unknown>)?.c ?? 0);
+  const superseded7d = Number((supersededRecent as Record<string, unknown>)?.c ?? 0);
   const foundational = (salienceFoundational as Record<string, unknown>)?.c as number || 0;
   const activeEntities = (salienceActive as Record<string, unknown>)?.c as number || 0;
   const background = (salienceBackground as Record<string, unknown>)?.c as number || 0;
@@ -289,6 +295,7 @@ Overall: ${bar(overallScore)} ${overallScore}%
   Avg Novelty:      ${noveltyAvg !== null ? noveltyAvg.toFixed(2) : 'n/a'}
   Orphans (30d+):   ${orphans}
   Archived Obs:     ${archivedObs}
+  Superseded Obs:   ${superseded} (${superseded7d} in the last 7d; hidden from search unless include_expired)
   Proposals:        ${pendingProposals} pending
 
 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}

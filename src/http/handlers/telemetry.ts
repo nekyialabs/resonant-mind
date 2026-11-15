@@ -20,6 +20,7 @@ export async function handleApiTelemetry(_request: Request, env: Env): Promise<R
     avgNovelty, surfacedRecent,
     spineCount, compassCount, compassEdges, compassByKind,
     graphStats,
+    supersededTotal, supersededRecent,
   ] = await Promise.all([
     env.DB.prepare(`SELECT COUNT(*) as c FROM entities`).first(),
     env.DB.prepare(`SELECT COUNT(*) as c FROM observations`).first(),
@@ -68,6 +69,8 @@ export async function handleApiTelemetry(_request: Request, env: Env): Promise<R
         MAX(rel_count) AS max_degree
       FROM entity_stats
     `).first().catch(() => null),
+    env.DB.prepare(`SELECT COUNT(*) as c FROM observations WHERE superseded_by IS NOT NULL`).first().catch(() => ({ c: 0 })),
+    env.DB.prepare(`SELECT COUNT(*) as c FROM observations WHERE superseded_by IS NOT NULL AND valid_until > $1`).bind(sevenDaysAgo).first().catch(() => ({ c: 0 })),
   ]);
 
   const n = (r: unknown, key = 'c'): number =>
@@ -188,6 +191,8 @@ export async function handleApiTelemetry(_request: Request, env: Env): Promise<R
       avg_novelty: (avgNovelty as { avg?: number | null })?.avg ?? null,
       orphans_30d: n(orphanCount),
       archived_obs: n(archivedObsCount),
+      superseded_obs: n(supersededTotal),
+      superseded_obs_7d: n(supersededRecent),
       pending_proposals: n(proposalCount),
     },
     graph: {

@@ -18,6 +18,7 @@
 
 import type { Env } from "../types";
 import { handleMindOrphans } from "./orphans";
+import { retireObservation } from "../shared/supersede";
 
 export async function handleMindProposals(env: Env, params: Record<string, unknown>): Promise<string> {
   const action = (params.action as string) || "list";
@@ -48,7 +49,8 @@ export async function handleMindProposals(env: Env, params: Record<string, unkno
       const proximities = proposals.results.filter(p => p.proposal_type === 'proximity');
       const compassAdds = proposals.results.filter(p => p.proposal_type === 'compass_addition');
       const identityAdds = proposals.results.filter(p => p.proposal_type === 'identity_addition');
-      const relations = proposals.results.filter(p => !['resonance', 'proximity', 'compass_addition', 'identity_addition'].includes(p.proposal_type as string));
+      const supersedes = proposals.results.filter(p => p.proposal_type === 'supersede');
+      const relations = proposals.results.filter(p => !['resonance', 'proximity', 'compass_addition', 'identity_addition', 'supersede'].includes(p.proposal_type as string));
 
       let output = proposals.results.length
         ? `## Pending Proposals (${proposals.results.length})\n\n*Connections the daemon thinks should exist. Review and accept or reject.*\n\n`
@@ -95,6 +97,18 @@ export async function handleMindProposals(env: Env, params: Record<string, unkno
           const confidence = Math.round((p.confidence as number) * 100);
           output += `**#${p.id}** [${confidence}%]\n`;
           if (p.content_a) output += `  "${String(p.content_a).slice(0, 200)}..."\n`;
+          output += `  *${p.reason}*\n\n`;
+        }
+      }
+
+      if (supersedes.length > 0) {
+        output += `### Possible Supersedes (${supersedes.length})\n`;
+        output += `*A new long observation looks like a rewrite of an older one. Nothing was retired. Accept to retire the older one; reject to keep both.*\n\n`;
+        for (const p of supersedes) {
+          const similarity = Math.round((p.confidence as number) * 100);
+          output += `**#${p.id}** [${p.entity_a}] [${similarity}% similar] older #${p.from_obs_id} → newer #${p.to_obs_id}\n`;
+          if (p.content_a) output += `  older: "${String(p.content_a).slice(0, 60)}..."\n`;
+          if (p.content_b) output += `  newer: "${String(p.content_b).slice(0, 60)}..."\n`;
           output += `  *${p.reason}*\n\n`;
         }
       }
@@ -153,7 +167,8 @@ export async function handleMindProposals(env: Env, params: Record<string, unkno
       output += `  {action:'accept', proposal_id, relation_type} → creates relation (cross-entity / resonance / proximity)\n`;
       output += `  {action:'accept', proposal_id, kind, content?} → materializes compass row (compass_addition)\n`;
       output += `  {action:'accept', proposal_id, section, content?} → materializes spine row (identity_addition)\n`;
-      output += `  {action:'reject', proposal_id} → dismisses permanently (never re-proposed)\n`;
+      output += `  {action:'accept', proposal_id} → retires the older observation (supersede)\n`;
+      output += `  {action:'reject', proposal_id} → dismisses permanently (never re-proposed); for a supersede, keeps both observations\n`;
       output += `  {action:'rescue', observation_id} → forces an orphan to resurface, removes it from the orphan queue\n`;
       output += `  {action:'archive', observation_id} → lets an orphan fade into the deep archive (mind_archive can bring it back)`;
       return output;
@@ -236,6 +251,23 @@ export async function handleMindProposals(env: Env, params: Record<string, unkno
         `).bind(proposalId).run();
 
         return `Spine row added to section '${section}': "${content.slice(0, 120)}${content.length > 120 ? '...' : ''}"\nProposal #${proposalId} accepted.`;
+      }
+
+      // -------- supersede: retire the older observation, as auto-supersede does ----------
+      if (ptype === 'supersede') {
+        const oldId = proposal.from_obs_id as number | null;
+        const newId = proposal.to_obs_id as number | null;
+        if (!oldId || !newId) return `Proposal #${proposalId} is missing one of its observations.`;
+        const retired = await retireObservation(env, oldId, newId);
+        // Resolve either way: if the older one was already retired elsewhere,
+        // the question is settled and the proposal should not linger.
+        await env.DB.prepare(`
+          UPDATE daemon_proposals SET status = $2, resolved_at = NOW()
+          WHERE id = $1
+        `).bind(proposalId, retired ? 'accepted' : 'expired').run();
+        return retired
+          ? `Observation #${oldId} superseded by #${newId}. Proposal #${proposalId} accepted.`
+          : `Observation #${oldId} was not changed (already retired, or the supersede columns are missing). Proposal #${proposalId} closed.`;
       }
 
       // -------- default: relation/resonance/proximity — needs relation_type ----------

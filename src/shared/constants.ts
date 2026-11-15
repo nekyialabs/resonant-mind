@@ -58,7 +58,11 @@ export const ACCESS_GROWTH_RATE = 0.1;   // 1 - exp(-rate * count), saturates ~2
 
 // Contradiction detection (Phase 2)
 export const CONTRADICTION_SIMILARITY_THRESHOLD = 0.80;
-export const AUTO_SUPERSEDE_THRESHOLD = 0.85;
+export const AUTO_SUPERSEDE_THRESHOLD = 0.85;  // default; AUTO_SUPERSEDE env overrides
+// Auto-supersede retires an old observation only when BOTH it and the new one
+// are this short (characters). Longer pairs become a ritual_tend proposal:
+// similarity of long narrative text measures topic and voice, not replacement.
+export const AUTO_SUPERSEDE_MAX_CHARS = 280;
 
 // Consolidation + reflection (Phase 3)
 export const CONSOLIDATION_MIN_OBS = 10;
