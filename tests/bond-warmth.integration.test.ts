@@ -7,6 +7,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createD1Adapter } from '../src/adapter';
 import { computeBondWarmth } from '../src/daemon/bond-warmth';
+import { handleMindFeelToward } from '../src/legacy-tools/feel-toward';
 import type { Env } from '../src/types';
 
 const url = process.env.TEST_BOND_WARMTH_DATABASE_URL;
@@ -21,8 +22,12 @@ const memory = (entityId: number, daysAgo: number, archived = false) =>
      VALUES ($1, 'x', NOW() - ($2 || ' days')::interval, ${archived ? 'NOW()' : 'NULL'})`, [entityId, String(daysAgo)]);
 const relate = (from: string, to: string, type: string) =>
   q(`INSERT INTO relations (from_entity, to_entity, relation_type) VALUES ($1, $2, $3)`, [from, to, type]);
-const feel = (person: string, daysAgo: number) =>
-  q(`INSERT INTO relational_state (person, feeling, intensity, timestamp) VALUES ($1, 'warm', 'soft', NOW() - ($2 || ' days')::interval)`, [person, String(daysAgo)]);
+// Written the way the product writes it (mind_feel_toward: exact name as given,
+// intensity defaults to 'present'), then back-dated.
+const feel = async (person: string, daysAgo: number) => {
+  await handleMindFeelToward(env, { person, feeling: 'warm' });
+  await q(`UPDATE relational_state SET timestamp = NOW() - ($2 || ' days')::interval WHERE person = $1`, [person, String(daysAgo)]);
+};
 const warmthOf = async (name: string) => (await computeBondWarmth(env)).find((b) => b.name === name)!;
 
 async function applyMigrations(client: pg.Client) {
