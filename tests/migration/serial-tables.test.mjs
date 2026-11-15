@@ -2,7 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { IMPORT_ORDER, SERIAL_TABLES, reconcileSerialTables, resetSequence } from '../../scripts/v32-to-v4/target/postgres.mjs';
-import { COMPARED_TARGET_TABLES } from '../../scripts/v32-to-v4/validate/compare.mjs';
+import { COMPARED_TARGET_TABLES, Findings } from '../../scripts/v32-to-v4/validate/compare.mjs';
+import { readLiveTarget } from '../../scripts/v32-to-v4/validate/live-target.mjs';
 
 // Issue #26: relations and consolidation_groups have a serial id but were missing from the set whose sequences
 // are reset after import (and checked by validate). The set is now read from the target's catalog and this
@@ -85,5 +86,34 @@ describe('resetSequence', () => {
     const client = clientFor();
     await resetSequence(client, 'relations', new Set(['entities']));
     expect(client.calls).toEqual([]);
+  });
+});
+
+describe('validate: a serial-table disagreement is a finding, never a throw', () => {
+  // A client for an empty target: every query answers with no rows, except the few the read needs to get as far as the sequence check.
+  const emptyTargetClient = (catalogRows) => ({
+    async query(text) {
+      if (/SHOW transaction_read_only/u.test(text)) return { rows: [{ transaction_read_only: 'on' }] };
+      if (/current_setting\('TimeZone'\)/u.test(text)) return { rows: [{ timezone: 'UTC', datestyle: 'ISO, YMD', search_path: 'public', extra_float_digits: '1' }] };
+      if (/current_database\(\)/u.test(text)) return { rows: [{ database_name: 'mind', database_oid: '1', server_address: null, server_port: '5432', server_version: '160000' }] };
+      if (/c\.relname = ANY\(\$1::text\[\]\)/u.test(text)) return { rows: catalogRows };
+      return { rows: [] };
+    },
+  });
+
+  it('records serial-tables-disagree with table names only, and still returns the read', async () => {
+    const findings = new Findings();
+    const rows = [{ table_name: 'relations', serial: false }, { table_name: 'threads', serial: true }];
+    const read = await readLiveTarget({ client: emptyTargetClient(rows), migrationId: 'rmig_x', findings });
+    expect(read.tables).toBeTruthy();
+    const found = findings.samples.filter((finding) => finding.check === 'serial-tables-disagree');
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ serial_in_target_not_in_migrator: ['threads'], in_migrator_not_serial_in_target: ['relations'] });
+  });
+
+  it('records nothing when the catalog agrees', async () => {
+    const findings = new Findings();
+    await readLiveTarget({ client: emptyTargetClient([...SERIAL_TABLES].map((table_name) => ({ table_name, serial: true }))), migrationId: 'rmig_x', findings });
+    expect(findings.samples.filter((finding) => finding.check === 'serial-tables-disagree')).toEqual([]);
   });
 });

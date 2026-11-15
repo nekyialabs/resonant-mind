@@ -37,11 +37,20 @@ const SERIAL_CATALOG_QUERY = `
  * Pure reconciliation of the catalog's answer with the static list. `rows` are { table_name, serial } for the IMPORT_ORDER tables that
  * exist and have an id column. Returns the set of serial tables, or refuses when the catalog and the list disagree.
  */
-export function reconcileSerialTables(rows, expected = SERIAL_TABLES) {
-  const catalog = new Set(rows.filter((row) => row.serial === true).map((row) => row.table_name));
+export function serialCatalogDifference(rows, expected = SERIAL_TABLES) {
+  const serial = new Set(rows.filter((row) => row.serial === true).map((row) => row.table_name));
   const present = new Set(rows.map((row) => row.table_name));
-  const notListed = [...catalog].filter((table) => !expected.has(table)).sort();
-  const notSerial = [...expected].filter((table) => present.has(table) && !catalog.has(table)).sort();
+  const notListed = [...serial].filter((table) => !expected.has(table)).sort();
+  const notSerial = [...expected].filter((table) => present.has(table) && !serial.has(table)).sort();
+  return { serial, notListed, notSerial };
+}
+/** The catalog read with no verdict: { serial, notListed, notSerial }. Import refuses on a disagreement (readSerialTables); validate reports it as a finding. */
+export async function readSerialCatalog(client) {
+  const result = await query(client, SERIAL_CATALOG_QUERY, [[...IMPORT_ORDER]]);
+  return serialCatalogDifference(result.rows ?? []);
+}
+export function reconcileSerialTables(rows, expected = SERIAL_TABLES) {
+  const { serial: catalog, notListed, notSerial } = serialCatalogDifference(rows, expected);
   if (notListed.length || notSerial.length) throw refusal('RMIG-E-TARGET-SCHEMA', 'import', 'The target schema and the migrator disagree about which tables have a serial id, so id sequences cannot be reset or checked safely.', { serial_in_target_not_in_migrator: notListed, in_migrator_not_serial_in_target: notSerial });
   return catalog;
 }
