@@ -521,7 +521,7 @@ export const TOOLS: MCPToolDefinition[] = [
   // ============================================================
   {
     name: "bond_enter",
-    description: "Enter a bond. Returns the room — warmth, feeling, recent moments, open threads, related people. One motion. The full felt presence of someone. Includes a felt-charge/somatic line (\"Sits: ...\", Gate F) drawn from entities.affect_valence/affect_arousal once at least 3 emotion-tagged signals exist.",
+    description: "Enter a bond. Returns the room — warmth (how recently anything was logged about them: a memory of them, a memory of something part of or about them, or a feeling toward them), feeling, recent moments, open threads, related people. One motion. The full felt presence of someone. Includes a felt-charge/somatic line (\"Sits: ...\", Gate F) drawn from entities.affect_valence/affect_arousal once at least 3 emotion-tagged signals exist.",
     inputSchema: {
       type: "object",
       properties: {

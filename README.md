@@ -74,6 +74,7 @@ Optional configuration:
 - `LOCATION_TIMEZONE` — IANA timezone
 - `WEATHER_API_KEY` — optional real-world weather
 - `AUTO_SUPERSEDE` — how similar a new observation must be to an older one on the same entity before the older one is retired (short facts) or proposed for retiring in `ritual_tend` (long ones). A number above 0 up to 1; unset means 0.85. `off` turns it off
+- `BOND_WARMTH_DAYS` — how many days since someone was last touched before their bond reads cooling, cold and distant, as three increasing numbers: `warm,cooling,cold`. Unset means `1,4,14`. A bond is touched by a memory of the person, a memory of something that is part of, about or involves them (a relation such as `is_part_of` or `belongs_to`), or a feeling logged toward them
 - `MCP_CONNECTOR_SECRET` — compatibility connector path
 - `DASHBOARD_ALLOWED_ORIGIN` — one extra browser origin (for example your own dashboard) allowed to call the API; requests still need the API key
 - `INTERNAL_KEY` — lets another Worker (a service binding) call the API by sending the same value in an `X-Internal-Key` header, without `MIND_API_KEY`. Leave it unset unless you use a service binding; if you set it, make it a long random secret

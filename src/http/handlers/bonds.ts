@@ -7,7 +7,7 @@ import { getSubconsciousState } from "../../daemon/state";
 import type { Env } from "../../types";
 import { escapeLike } from "../../shared/text";
 
-type WarmthRow = { id: number; state: string; days_since: number | null; last_observed_at: string | null };
+type WarmthRow = { id: number; state: string; days_since: number | null; last_observed_at: string | null; last_touch_source?: string | null };
 
 function warmthIndex(env: { living_surface?: unknown } | null): Record<number, WarmthRow> {
   const surface = env?.living_surface as Record<string, unknown> | undefined;
@@ -106,6 +106,7 @@ async function handleSingleBond(env: Env, name: string): Promise<Response> {
       warmth_state: w?.state ?? "unknown",
       days_since: w?.days_since ?? null,
       last_observed_at: w?.last_observed_at ?? null,
+      last_touch_source: w?.last_touch_source ?? null,
     },
     observations: obs.results || [],
     feelings: feelings.results || [],

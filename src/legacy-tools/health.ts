@@ -6,6 +6,7 @@
 
 import type { Env } from "../types";
 import { getSubconsciousState } from "../daemon/state";
+import { resolveBondWarmthDays } from "../daemon/bond-warmth";
 
 export async function handleMindHealth(env: Env): Promise<string> {
   const now = new Date();
@@ -135,6 +136,7 @@ export async function handleMindHealth(env: Env): Promise<string> {
     | undefined;
   const identityHuntProposed = (livingSurface?.identity_hunt_proposed as number | undefined) ?? 0;
 
+  const warmDays = resolveBondWarmthDays(env);
   const bondWarmCount = bondWarmthSnapshot?.filter((b) => b.state === 'warm').length || 0;
   const bondCoolingCount = bondWarmthSnapshot?.filter((b) => b.state === 'cooling').length || 0;
   const bondColdCount = bondWarmthSnapshot?.filter((b) => b.state === 'cold').length || 0;
@@ -277,11 +279,12 @@ Overall: ${bar(overallScore)} ${overallScore}%
 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
 \u{1F91D} BONDS                    ${icon(bondWarmthSnapshot ? 100 : 40)}
 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
-  Warm:          ${bondWarmCount} (< 1d)
-  Cooling:       ${bondCoolingCount} (1-4d)
-  Cold:          ${bondColdCount} (4-14d)
-  Distant:       ${bondDistantCount} (14d+)
-  Untouched:     ${bondUntouchedCount} (no active obs)
+  Warm:          ${bondWarmCount} (< ${warmDays.warm}d since last touch)
+  Cooling:       ${bondCoolingCount} (${warmDays.warm}-${warmDays.cooling}d)
+  Cold:          ${bondColdCount} (${warmDays.cooling}-${warmDays.cold}d)
+  Distant:       ${bondDistantCount} (${warmDays.cold}d+)
+  Untouched:     ${bondUntouchedCount} (nothing logged about them)
+  (a touch = a memory of them, a memory of something part of or about them, or a feeling logged toward them)
 
 \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}
 \u{1F4DD} ACTIVITY (7d)            ${icon(activityScore)}
