@@ -383,7 +383,15 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
           if (override !== undefined) { compareCell(sc, tc, override); continue; }
         }
         if (sc === 'source_observation_ids') {
-          let ids; try { ids = typeof value === 'string' ? JSON.parse(value) : value; } catch { ids = null; }
+          let ids; try { ids = typeof value === 'string' ? JSON.parse(value) : value; } catch { ids = undefined; }
+          if (typeof value === 'string' && ids !== undefined && !jsonSurvivesParsing(value)) ids = undefined;
+          // Unparseable text or a list of the wrong shape is a reviewed decision, exactly as for the other JSON columns; the transform then
+          // remaps the reviewed list through the observation id map like a well-shaped source list, so the expectation below does too.
+          if (ids === undefined || !jsonShapeValid(ids, JSON_SHAPES.get(sc))) {
+            const choice = reviewedChoice(decisions, sourceTable, rowHash, 'malformed-json', sc);
+            if (choiceAction(choice) !== 'map-json' || !Object.hasOwn(choice, 'value')) { cells += 1; summary.cells_compared += 1; fail(tc, 'json-unreviewed'); continue; }
+            ids = choice.value; bump('json-reviewed-replacement');
+          }
           const expectedIds = Array.isArray(ids) ? ids.map((item) => { const entry = compiled.id_map?.[lookup('observations', Number(item))]; return entry === undefined ? Number(item) : entry.excluded ? null : entry.target_id; }).filter((item) => item !== null) : null;
           cells += 1; summary.cells_compared += 1;
           const actual = Array.isArray(target[tc]) ? target[tc].map(Number) : (typeof target[tc] === 'string' ? (() => { try { return JSON.parse(target[tc]).map(Number); } catch { return null; } })() : null);

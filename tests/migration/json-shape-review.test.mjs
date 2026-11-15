@@ -122,3 +122,77 @@ describe('transform and validator agree on which values need a reviewed choice',
     expect(result.sanctioned['json-reviewed-replacement']).toBe(2);
   });
 });
+
+// consolidation_groups.source_observation_ids is compared as an id list (its own branch), and a reviewed value goes
+// through the same observation id remap in the transform as a well-shaped source list does.
+describe('reviewed consolidation_groups.source_observation_ids', () => {
+  function buildGroups({ ids, reviewedValue, excludeObservation4 = false }) {
+    const bundle = {
+      migration_id: 'rmig_ids_test',
+      bundle_manifest_sha256: 'b'.repeat(64),
+      tables: {
+        entities: [{ id: 1, name: 'Ada', entity_type: 'person', primary_context: 'default', salience: 'active', created_at: '2026-01-02T03:04:05Z', updated_at: '2026-01-02T03:04:06Z' }],
+        observations: [
+          { id: 3, entity_id: 1, content: 'three', weight: 'light', context: 'default', added_at: '2026-01-02T04:00:00Z' },
+          { id: 4, entity_id: 1, content: 'four', weight: 'light', context: 'default', added_at: excludeObservation4 ? 'not a time' : '2026-01-02T05:00:00Z' },
+        ],
+        consolidation_groups: [{ id: 1, summary: 'both', entity_id: 1, source_observation_ids: ids, consolidated_observation_id: 3, created_at: '2026-01-02T12:00:00Z' }],
+      },
+    };
+    const draft = generateDecisionManifest(bundle, { now: '2026-09-20T00:00:00.000Z' });
+    const choose = (item) => (item.type === 'malformed-json' ? { action: 'map-json', value: reviewedValue } : { action: 'exclude-row' });
+    const manifest = { ...draft, items: draft.items.map((item) => ({ ...item, stated_by: 'owner', choice: choose(item) })), reviewed: true, reviewed_by: 'test', reviewed_at: '2026-09-20T00:01:00.000Z' };
+    manifest.manifest_sha256 = decisionManifestHash(manifest);
+    const compiled = compilePolicy({ bundle, decisions: manifest });
+    const plan = transformRelational({ bundle, compiledPolicy: compiled });
+    return { bundle, manifest, compiled, plan };
+  }
+  const idsOf = (built) => built.plan.members.consolidation_groups[0].source_observation_ids;
+
+  it.each([
+    ['a JSON string', '"3, 4"', [3, 4]],
+    ['an object', '{"a":3}', [3, 4]],
+    ['a JSON boolean', 'true', [3, 4]], // a list with a non-integer item is also flagged broken-foreign-key, whose only reviewed choice is exclude-row
+    ['unparseable text', '3, 4', [3, 4]],
+  ])('%s, reviewed, passes', (_label, ids, reviewedValue) => {
+    const built = buildGroups({ ids, reviewedValue });
+    expect(idsOf(built)).toEqual([3, 4]);
+    const result = compare(built, built.manifest);
+    expect(result.findings.samples).toEqual([]);
+    expect(result.sanctioned['json-reviewed-replacement']).toBe(1);
+  });
+
+  it('the same cells without a reviewed choice fail as json-unreviewed', () => {
+    for (const ids of ['"3, 4"', '3, 4', 'true']) {
+      const built = buildGroups({ ids, reviewedValue: [3, 4] });
+      // only the malformed-json choice is withdrawn; every other reviewed choice stays as it was
+      const withdrawn = { ...built.manifest, items: built.manifest.items.map((item) => (item.type === 'malformed-json' ? { ...item, choice: { action: 'keep' } } : item)) };
+      const result = compare(built, withdrawn);
+      expect(JSON.stringify(result.findings.samples)).toContain('json-unreviewed');
+    }
+  });
+
+  it('a reviewed list is carried through the observation id map exactly as a well-shaped source list is', () => {
+    // Observation 4 is excluded by review. The id map only marks excluded *entities*, so neither a source list nor a reviewed
+    // list drops id 4 (the transform keeps it; validate expects the same). What matters here is that the two paths agree.
+    const reviewedPath = buildGroups({ ids: '"3, 4"', reviewedValue: [3, 4], excludeObservation4: true });
+    const sourcePath = buildGroups({ ids: '[3, 4]', reviewedValue: [3, 4], excludeObservation4: true });
+    expect(idsOf(reviewedPath)).toEqual(idsOf(sourcePath));
+    expect(compare(reviewedPath, reviewedPath.manifest).findings.samples).toEqual([]);
+    expect(compare(sourcePath, sourcePath.manifest).findings.samples).toEqual([]);
+  });
+
+  it('a target that does not hold the reviewed list fails as id-list', () => {
+    const built = buildGroups({ ids: '"3, 4"', reviewedValue: [3, 4] });
+    const wrong = compare(built, built.manifest, (t) => { t.consolidation_groups[0].source_observation_ids = [3]; });
+    expect(JSON.stringify(wrong.findings.samples)).toContain('id-list');
+  });
+
+  it('a well-shaped list needs no review', () => {
+    const built = buildGroups({ ids: '[3, 4]', reviewedValue: [3] });
+    expect(built.manifest.items.filter((item) => item.type === 'malformed-json')).toEqual([]);
+    const result = compare(built, built.manifest);
+    expect(result.findings.samples).toEqual([]);
+    expect(result.sanctioned['json-reviewed-replacement']).toBeUndefined();
+  });
+});
