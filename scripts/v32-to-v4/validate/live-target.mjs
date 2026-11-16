@@ -11,7 +11,7 @@
 import { parseInstantMicros } from '../lib/instant.mjs';
 import { MigrationRefusal } from '../lib/refusal.mjs';
 import { SOURCE_SESSION_SETTINGS } from '../source/postgres-v32.mjs';
-import { SERIAL_TABLES, ledgerBinding, readIdentityInTransaction } from '../target/postgres.mjs';
+import { readSerialCatalog, ledgerBinding, readIdentityInTransaction } from '../target/postgres.mjs';
 import { COMPARED_TARGET_TABLES } from './compare.mjs';
 import { CHECKS_QUERY, classifyChecks, loadExpectedChecks } from '../spec/v4-checks.mjs';
 
@@ -127,7 +127,10 @@ export async function readLiveTarget({ client, migrationId, findings }) {
 
     // Sequences: the next value of every serial id must be beyond the largest id stored.
     const sequences = [];
-    for (const table of SERIAL_TABLES) {
+    // The serial set comes from the target's catalog. A disagreement with the migrator's list is a finding (never a throw: the report must still be written).
+    const serialCatalog = await readSerialCatalog(client);
+    if (serialCatalog.notListed.length || serialCatalog.notSerial.length) findings.add('serial-tables-disagree', { serial_in_target_not_in_migrator: serialCatalog.notListed, in_migrator_not_serial_in_target: serialCatalog.notSerial });
+    for (const table of [...serialCatalog.serial].sort()) {
       if (!columnTypes[table]?.id) continue;
       const name = (await client.query("SELECT pg_catalog.pg_get_serial_sequence($1, 'id') AS name", [`public.${table}`])).rows[0]?.name;
       if (!name) continue;

@@ -1,6 +1,6 @@
 import { canonicalJson } from '../lib/canonical-json.mjs';
 import { canonicalSha256 } from '../lib/hash.mjs';
-import { KIND_NORMALIZATIONS, ISO_WITH_OFFSET, SQLITE_UTC, TIMESTAMP_FIELDS, DATE_FIELDS, KNOWN_CONTEXTS as CONTEXTS, contextVocabulary, decisionItemForCell } from '../policy/generate.mjs';
+import { KIND_NORMALIZATIONS, ISO_WITH_OFFSET, SQLITE_UTC, TIMESTAMP_FIELDS, DATE_FIELDS, KNOWN_CONTEXTS as CONTEXTS, contextVocabulary, decisionItemForCell, JSON_SHAPES, jsonShapeValid } from '../policy/generate.mjs';
 import { choiceAction } from './id-map.mjs';
 import { targetColumnAllowsNull } from './target-schema.mjs';
 import { jsonSurvivesParsing } from '../lib/lossless-json.mjs';
@@ -95,8 +95,7 @@ export function normalizeJson(value, expectedShape, { choice } = {}) {
   if (value === null || value === undefined) return null;
   let parsed = value;
   if (typeof value === 'string') { try { parsed = JSON.parse(value); } catch { parsed = undefined; } if (parsed !== undefined && !jsonSurvivesParsing(value)) parsed = undefined; }
-  const valid = expectedShape === 'array' ? Array.isArray(parsed) : expectedShape === 'integer-array' ? Array.isArray(parsed) && parsed.every((item) => Number.isSafeInteger(typeof item === 'number' ? item : Number(item))) : expectedShape === 'object' ? parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) : Array.isArray(parsed) || (parsed !== null && typeof parsed === 'object');
-  if (valid) return parsed;
+  if (jsonShapeValid(parsed, expectedShape)) return parsed;
   const selected = choice?.choice ?? choice;
   if (action(selected) !== 'map-json' || !Object.hasOwn(selected, 'value')) throw new Error('Malformed JSON requires a reviewed shape-preserving choice.');
   const mapped = selected.value; const mappedValid = expectedShape === 'array' ? Array.isArray(mapped) : expectedShape === 'integer-array' ? Array.isArray(mapped) && mapped.every((item) => Number.isSafeInteger(typeof item === 'number' ? item : Number(item))) : expectedShape === 'object' ? mapped !== null && typeof mapped === 'object' && !Array.isArray(mapped) : true;
@@ -141,11 +140,11 @@ export function buildValueMaps({ tables = {}, policy, skipRows = new Set() } = {
       if (TIMESTAMP_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'timestamp', field); try { output.timestamps[`${table}:${rowHash}:${field}`] = normalizeTimestamp(value, { choice: item, table, field, row }); } catch (error) { losses.push({ kind: 'unresolved-timestamp', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
       if (ENUM_FIELDS.has(`${table}.${field}`) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'unknown-value', field); try { output.enums[`${table}:${rowHash}:${field}`] = normalizeEnum(value, field, { choice: item }); } catch (error) { losses.push({ kind: 'unresolved-enum', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
       if (['context', 'scope', 'primary_context'].includes(field) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'unknown-value', field); try { output.contexts[`${table}:${rowHash}:${field}`] = normalizeContext(value, { choice: item, table, field }); } catch (error) { losses.push({ kind: 'unresolved-context', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
-      if (['links', 'connections', 'tags', 'source_observation_ids', 'data', 'sit_notes'].includes(field) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'malformed-json', field); try { output.json[`${table}:${rowHash}:${field}`] = normalizeJson(value, field === 'data' ? 'object' : field === 'sit_notes' ? 'array-or-object' : field === 'source_observation_ids' ? 'integer-array' : 'array', { choice: item }); } catch (error) { losses.push({ kind: 'unresolved-json', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
+      if (['links', 'connections', 'tags', 'source_observation_ids', 'data', 'sit_notes'].includes(field) && value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'malformed-json', field); try { output.json[`${table}:${rowHash}:${field}`] = normalizeJson(value, JSON_SHAPES.get(field), { choice: item }); } catch (error) { losses.push({ kind: 'unresolved-json', source_table: table, source_row_sha256: rowHash, field, reason: error.message }); } }
     }
     if (table === 'entities') { const value = row.entity_type ?? row.kind; if (value !== null && value !== undefined) { const item = policyChoice(policy, row, table, 'entity-kind', 'entity_type'); try { output.entity_kinds[`${table}:${rowHash}`] = normalizeEntityKind(value, { choice: item }); } catch (error) { losses.push({ kind: 'unresolved-entity-kind', source_table: table, source_row_sha256: rowHash, reason: error.message }); } } }
   }
   losses.sort((a, b) => canonicalJson(a).localeCompare(canonicalJson(b))); return { ...output, losses, hash: canonicalSha256({ ...output, losses }) };
 }
 export const compileValueMap = buildValueMaps;
-export { ENUMS, ALIASES, CONTEXTS, ENUM_FIELDS };
+export { ENUMS, ALIASES, CONTEXTS, ENUM_FIELDS, JSON_SHAPES, jsonShapeValid };

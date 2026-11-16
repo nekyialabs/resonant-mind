@@ -19,7 +19,7 @@ import { parseInstantMicros } from '../lib/instant.mjs';
 import { jsonSurvivesParsing, sameJsonLossless } from '../lib/lossless-json.mjs';
 import { sourceKey } from '../transform/id-map.mjs';
 import { KIND_NORMALIZATIONS, ISO_WITH_OFFSET, SQLITE_UTC, DATE_FIELDS, TIMESTAMP_FIELDS, contextVocabulary, decisionItemForCell } from '../policy/generate.mjs';
-import { ALIASES, ENUMS, ENUM_FIELDS } from '../transform/value-map.mjs';
+import { ALIASES, ENUMS, ENUM_FIELDS, JSON_SHAPES, jsonShapeValid } from '../transform/value-map.mjs';
 import { TARGET_SCHEMAS, targetColumnAllowsNull } from '../transform/target-schema.mjs';
 
 const MAP = JSON.parse(readFileSync(new URL('../spec/v3.2-to-v4-map.json', import.meta.url), 'utf8'));
@@ -340,7 +340,8 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
           let parsed;
           try { parsed = typeof sv === 'string' ? JSON.parse(sv) : sv; } catch { parsed = undefined; }
           if (typeof sv === 'string' && parsed !== undefined && !jsonSurvivesParsing(sv)) parsed = undefined; // a repeated key or an inexact number is a reviewed decision, as in the plan
-          if (parsed === undefined) {
+          // Unparseable text and JSON of the wrong shape are one case: the owner reviewed a replacement (value-map's normalizeJson uses the same predicate)
+          if (parsed === undefined || !jsonShapeValid(parsed, JSON_SHAPES.get(sc))) {
             const choice = reviewedChoice(decisions, sourceTable, rowHash, 'malformed-json', sc);
             if (choiceAction(choice) !== 'map-json' || !Object.hasOwn(choice, 'value')) { fail(tc, 'json-unreviewed'); return; }
             expected = choice.value; bump('json-reviewed-replacement');
@@ -382,7 +383,15 @@ export function compareSourceToTarget({ sourceTables, targetTables, compiled, de
           if (override !== undefined) { compareCell(sc, tc, override); continue; }
         }
         if (sc === 'source_observation_ids') {
-          let ids; try { ids = typeof value === 'string' ? JSON.parse(value) : value; } catch { ids = null; }
+          let ids; try { ids = typeof value === 'string' ? JSON.parse(value) : value; } catch { ids = undefined; }
+          if (typeof value === 'string' && ids !== undefined && !jsonSurvivesParsing(value)) ids = undefined;
+          // Unparseable text or a list of the wrong shape is a reviewed decision, exactly as for the other JSON columns; the transform then
+          // remaps the reviewed list through the observation id map like a well-shaped source list, so the expectation below does too.
+          if (ids === undefined || !jsonShapeValid(ids, JSON_SHAPES.get(sc))) {
+            const choice = reviewedChoice(decisions, sourceTable, rowHash, 'malformed-json', sc);
+            if (choiceAction(choice) !== 'map-json' || !Object.hasOwn(choice, 'value')) { cells += 1; summary.cells_compared += 1; fail(tc, 'json-unreviewed'); continue; }
+            ids = choice.value; bump('json-reviewed-replacement');
+          }
           const expectedIds = Array.isArray(ids) ? ids.map((item) => { const entry = compiled.id_map?.[lookup('observations', Number(item))]; return entry === undefined ? Number(item) : entry.excluded ? null : entry.target_id; }).filter((item) => item !== null) : null;
           cells += 1; summary.cells_compared += 1;
           const actual = Array.isArray(target[tc]) ? target[tc].map(Number) : (typeof target[tc] === 'string' ? (() => { try { return JSON.parse(target[tc]).map(Number); } catch { return null; } })() : null);

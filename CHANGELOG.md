@@ -4,6 +4,23 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0�
 
 ---
 
+## [4.1.6] — 2026-11-16
+
+**Migration fixes (#21, #26).** No schema change. If you migrated a mind from v3.2 before this release, run `npm run check:sequences` (read-only); see below.
+
+### Fixed
+
+- **Validate accepts a reviewed fix for JSON that is valid but the wrong shape** (#21). A JSON string where an array belongs, such as `journals.tags`, was listed for review and import applied your reviewed value, but validate still compared against the source and reported a mismatch. The import, the decision list and validate now share one shape test, so they can't disagree again. The same holds for `consolidation_groups.source_observation_ids`.
+- **Import resets the id counters of `relations` and `consolidation_groups`** (#26). Before, a migrated mind's new relations failed with a duplicate key until the counter caught up. The set of tables to reset is now read from the target's own catalog and cross-checked against the migrator's list: import refuses if they disagree, and validate reports it as `serial-tables-disagree`. Validate's `sequence-behind-data` check now covers these tables too.
+
+### Added
+
+- **`npm run check:sequences`**, a read-only check that lists any id counter behind its data. If you migrated before 4.1.6, run it, then read "Id sequences after a migration" in USER_MIGRATION_GUIDE.md for the one-line repair. The repair is your decision; back up first.
+
+### Testing
+
+GitHub builds are paused for this release. The full `npm run verify` and the PostgreSQL migration suite were run locally on PostgreSQL 18.6.
+
 ## [4.1.5] — 2026-11-13
 
 **Security and correctness fixes from a code audit (#25). Upgrade: two advisories apply to every version from 3.0.0 to 4.1.4.** No schema change and no migration. After upgrading, read the first advisory's note on rotating secrets.

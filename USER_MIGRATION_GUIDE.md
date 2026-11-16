@@ -554,6 +554,29 @@ During cutover, stop writes, route the application to v4 through the normal depl
 
 Rollback means stop v4 traffic and restore the application to the untouched v3 database using the normal operational change process. There is no reverse copy from v4 to v3. Do not mutate v3 to “undo” a cutover and do not delete the v3 backup until the retention window and acceptance decision are complete.
 
+## Id sequences after a migration (minds migrated before 4.1.6)
+
+**Who this is for:** anyone who imported a v3.2 mind with a migrator older than 4.1.6. Those versions did not reset the id sequences of `relations` and `consolidation_groups` after copying the rows in, so each sequence still starts at 1 while the table already holds ids above that. The first new relation (or consolidation group) then fails with a duplicate primary key error. 4.1.6 resets both, and `validate` now checks them.
+
+**If you migrated with 4.1.6 or later, nothing here applies to you.** A mind that has never added a relation since the import may look fine until it does.
+
+Check (read-only: one `READ ONLY` transaction, `SELECT`s only, rolled back; it prints table names and numbers, never memory content):
+
+```bash
+PG_URL='postgres://<your connection string>' npm run check:sequences
+PG_URL='postgres://<your connection string>' npm run check:sequences -- --json   # for an agent
+```
+
+It lists every serial `id` in the `public` schema with the sequence's next value and the largest id stored, and flags any sequence that is behind its data. Exit code `0`: all ahead; `1`: at least one behind; `2`: the check could not run. TLS works as for `db:migrate`.
+
+If a sequence is behind, the repair is a single statement per table. It changes the database, so it is the owner's decision: take a backup first, and run it only after seeing the report. For `relations`:
+
+```sql
+SELECT setval(pg_get_serial_sequence('public.relations','id'), (SELECT max(id) FROM public.relations), true);
+```
+
+Use the table named in the report instead of `relations` where it is another one (`consolidation_groups` for the same migration cause). `setval(..., true)` makes the next value `max(id) + 1`; it never lowers a sequence below data that exists and does not touch any row. Run the check again afterwards; it should report every table as ok. If anything in the report surprises you, change nothing and ask for help.
+
 ## Sensitive artifact retention
 
 Keep the encrypted bundle, manifests, decisions, the compiled policy and the relational staging plan (both hold the migrated content and are encrypted with the passphrase file unless you wrote them as plaintext, in which case treat them like a plaintext bundle), source/target reports, image inventory, external receipts, and validation evidence only for the approved audit/rollback window. Restrict filesystem and object permissions, keep passphrases outside the artifact directory, and do not place sensitive values in filenames, logs, chat, or issue trackers. After the window, destroy the bundle, plaintext temporary exports, local D1 materializations, passphrase file, copied image staging area, and provider handoff artifacts using the organization's approved secure-destruction procedure. Retain only redacted hashes and non-sensitive evidence required by policy.

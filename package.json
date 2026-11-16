@@ -1,6 +1,6 @@
 {
   "name": "resonant-mind",
-  "version": "4.1.5",
+  "version": "4.1.6",
   "private": true,
   "description": "A Postgres-backed cognitive substrate for persistent AI memory, identity, dreams, drives, and relational continuity",
   "license": "SEE LICENSE IN LICENSE",
@@ -18,6 +18,7 @@
     "test:migration": "vitest run tests/migration",
     "scan:release": "node scripts/scan-release.mjs",
     "check:merge-damage": "node scripts/check-merge-damage.mjs",
+    "check:sequences": "node scripts/check-sequences.mjs",
     "repair:merge-vectors": "node scripts/repair-merge-vectors.mjs",
     "db:migrate": "node scripts/migrate-postgres.mjs",
     "migrate:v32": "node scripts/v32-to-v4/cli.mjs",
