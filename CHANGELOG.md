@@ -4,6 +4,27 @@ All notable changes to Resonant Mind. Previously released as "Mind Cloud" (v1.0�
 
 ---
 
+## [4.2.0] — 2026-11-16
+
+**Auto-supersede no longer retires long memories on its own (#28), and bond warmth follows what is logged about a person (#27).** No schema change and no migration. If your mind has long, narrative observations, run `npm run check:supersede` (read-only) after upgrading; see below.
+
+### Changed
+
+- **Auto-supersede: short facts only** (#28). A new observation retires an older, similar one on the same entity automatically only when both are 280 characters or fewer. Short facts such as "lives in X" then "moved to Y" still replace each other. A long pair that looks alike is never retired silently. It is proposed in `ritual_tend` as a "possible supersede": accept it to retire the older one, reject it to keep both. These proposals respect the pending-proposal cap. Before, any pair at 0.85 similarity was retired, and for long entries written in one voice, similarity measures topic and style, not replacement. One mind lost a third of its memories this way, and search then hid them.
+- **Bond warmth counts everything logged about the person** (#27). A bond is now warmed by a memory filed on the person, a memory on something that is part of or about them (a relation such as `is_part_of` or `belongs_to`, in either direction), or a feeling logged toward them with `mind_feel_toward`. Before, only memories filed directly on the person counted, so a bond whose memories sit on a relationship node read "distant" on a day it was written about. Archived memories still don't count. Bond details include `last_touch_source` (`memory`, `related` or `feeling`), and `last_observed_at` now means the latest touch of any kind.
+
+### Added
+
+- **`AUTO_SUPERSEDE`** setting: a number above 0 up to 1 sets how similar two observations must be (default 0.85); `off` turns auto-supersede and its proposals off.
+- **`BOND_WARMTH_DAYS`** setting, for example `2,7,30`: days before a bond reads cooling, cold and distant. Unset means `1,4,14`. `mind_health` shows the values in use.
+- **`mind_health` reports superseded observations**, in total and in the last 7 days.
+- **`npm run check:supersede`**, a read-only check that lists observations retired by earlier releases: ids, lengths, dates and word overlap, never content. Read [docs/supersede-check.md](docs/supersede-check.md) before changing anything. It includes a way to bring chosen ones back, and every repair is your decision.
+- **`mind_search` shows when an observation was added** if it has no source date, so you can tell which of several results is newest.
+
+### Testing
+
+GitHub builds are paused for this release. The full `npm run verify` and the PostgreSQL suites, including new ones for supersede and bond warmth, were run locally on PostgreSQL 18.6.
+
 ## [4.1.6] — 2026-11-16
 
 **Migration fixes (#21, #26).** No schema change. If you migrated a mind from v3.2 before this release, run `npm run check:sequences` (read-only); see below.

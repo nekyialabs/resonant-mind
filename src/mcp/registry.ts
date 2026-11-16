@@ -154,7 +154,7 @@ export const TOOLS: MCPToolDefinition[] = [
   },
   {
     name: "ritual_tend",
-    description: "The third practice — wake, ground, TEND. Reviews BOTH of the daemon's queues: proposed connections (co-surfaced relations, internal resonances, entity proximities, compass/spine additions) AND orphaned observations (medium/heavy, unsurfaced 30+ days). list (default) shows both queues. Proposals: accept materializes (relation_type for relations/resonances/proximities; kind+content? for compass_addition; section+content? for identity_addition); reject dismisses permanently — a rejected pair is never re-proposed, an expired one may return if it keeps co-surfacing. Orphans: rescue forces one to resurface and clears it from the orphan queue; archive lets it fade into the deep archive (recoverable via mind_archive). The daemon proposes and orphans accumulate; the mind disposes.",
+    description: "The third practice — wake, ground, TEND. Reviews BOTH of the daemon's queues: proposed connections (co-surfaced relations, internal resonances, entity proximities, compass/spine additions, possible supersedes of long observations) AND orphaned observations (medium/heavy, unsurfaced 30+ days). list (default) shows both queues. Proposals: accept materializes (relation_type for relations/resonances/proximities; kind+content? for compass_addition; section+content? for identity_addition; no extra field for a possible supersede, which retires the older observation); reject dismisses permanently — a rejected pair is never re-proposed, an expired one may return if it keeps co-surfacing. Orphans: rescue forces one to resurface and clears it from the orphan queue; archive lets it fade into the deep archive (recoverable via mind_archive). The daemon proposes and orphans accumulate; the mind disposes.",
     inputSchema: {
       type: "object",
       properties: {
@@ -521,7 +521,7 @@ export const TOOLS: MCPToolDefinition[] = [
   // ============================================================
   {
     name: "bond_enter",
-    description: "Enter a bond. Returns the room — warmth, feeling, recent moments, open threads, related people. One motion. The full felt presence of someone. Includes a felt-charge/somatic line (\"Sits: ...\", Gate F) drawn from entities.affect_valence/affect_arousal once at least 3 emotion-tagged signals exist.",
+    description: "Enter a bond. Returns the room — warmth (how recently anything was logged about them: a memory of them, a memory of something part of or about them, or a feeling toward them), feeling, recent moments, open threads, related people. One motion. The full felt presence of someone. Includes a felt-charge/somatic line (\"Sits: ...\", Gate F) drawn from entities.affect_valence/affect_arousal once at least 3 emotion-tagged signals exist.",
     inputSchema: {
       type: "object",
       properties: {

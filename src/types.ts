@@ -16,6 +16,10 @@ export interface Env {
   LOCATION_TIMEZONE?: string;
   DASHBOARD_ALLOWED_ORIGIN?: string;
   INTERNAL_KEY?: string;
+  /** Auto-supersede similarity threshold: a number above 0 up to 1, or "off". Unset: 0.85. */
+  AUTO_SUPERSEDE?: string;
+  /** Bond warmth thresholds in days: "warm,cooling,cold". Unset: "1,4,14". */
+  BOND_WARMTH_DAYS?: string;
 }
 
 export interface MCPRequest {

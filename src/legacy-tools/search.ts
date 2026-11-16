@@ -16,6 +16,14 @@ import { SEARCH_SCORING, RECENCY_DECAY_RATE, ACCESS_GROWTH_RATE } from "../share
 import { clampLimit } from "../shared/limits";
 import { escapeLike } from "../shared/text";
 
+// YYYY-MM-DD from a date column (string or Date); '' when empty or unreadable.
+function dayOf(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? '' : value.toISOString().slice(0, 10);
+  const s = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : '';
+}
+
 export async function handleMindSearch(env: Env, params: Record<string, unknown>): Promise<string> {
   const query = params.query as string;
   const n_results = clampLimit(params.n_results, 10);
@@ -303,7 +311,10 @@ ${String(r.content).slice(0, 300)}...
       const archivedTag = isArchived ? ' [archived]' : '';
       const supersededTag = details?.superseded_by ? ' [superseded]' : '';
       const sourceTag = details?.source ? ` (${details.source})` : '';
-      const dateTag = details?.source_date ? ` [${details.source_date}]` : '';
+      // source_date when set; otherwise when it was added, so readers can tell which is newest.
+      const sourceDay = dayOf(details?.source_date);
+      const addedDay = dayOf(details?.added_at);
+      const dateTag = sourceDay ? ` [${sourceDay}]` : addedDay ? ` [added ${addedDay}]` : '';
       const displayScore = ((match as any).compositeScore * 100).toFixed(1);
 
       output += `**[${sourceType}]${context} ${label}**${archivedTag}${supersededTag}${sourceTag}${dateTag} (${displayScore}%)\n`;

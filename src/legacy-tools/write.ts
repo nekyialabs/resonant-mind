@@ -7,11 +7,9 @@
 import type { Env } from "../types";
 import { getEmbedding } from "../shared/mind-helpers";
 import { normalizeText } from "../shared/text";
-import { CONTRADICTION_SIMILARITY_THRESHOLD, AUTO_SUPERSEDE_THRESHOLD } from "../shared/constants";
+import { CONTRADICTION_SIMILARITY_THRESHOLD, AUTO_SUPERSEDE_MAX_CHARS, PROPOSAL_PENDING_CAP } from "../shared/constants";
+import { resolveAutoSupersede, retireObservation } from "../shared/supersede";
 import { checkStartle } from "../daemon/somatic";
-
-// Log the genuinely-missing supersede columns case (42703) once per isolate, not per write.
-let supersedeColumnsMissingLogged = false;
 
 export async function handleMindWrite(env: Env, params: Record<string, unknown>): Promise<string> {
   switch (params.type as string) {
@@ -102,7 +100,7 @@ async function writeEntity(env: Env, params: Record<string, unknown>): Promise<s
 
 // Detect contradictions with existing observations for the same entity
 async function detectContradictions(
-  env: Env, entityName: string, newContent: string
+  env: Env, entityName: string, newContent: string, minSimilarity: number = CONTRADICTION_SIMILARITY_THRESHOLD
 ): Promise<Array<{ id: number; content: string; similarity: number }>> {
   try {
     const embedding = await getEmbedding(env, `${entityName}: ${newContent}`);
@@ -110,7 +108,7 @@ async function detectContradictions(
 
     const candidates: Array<{ id: number; content: string; similarity: number }> = [];
     for (const match of vectorResults.matches || []) {
-      if (match.score < CONTRADICTION_SIMILARITY_THRESHOLD) continue;
+      if (match.score < minSimilarity) continue;
       const meta = match.metadata as Record<string, string>;
       // Must be same entity
       if (meta?.entity !== entityName && meta?.entity_name !== entityName) continue;
@@ -174,11 +172,18 @@ async function writeObservation(env: Env, params: Record<string, unknown>): Prom
   }
 
   let totalSuperseded = 0;
+  let totalProposed = 0;
   let vectorizationFailures = 0;
 
+  // AUTO_SUPERSEDE: unset = default threshold, a number = that threshold, "off" = never.
+  const autoSupersede = resolveAutoSupersede(env);
+
   for (const obs of observations) {
-    // Phase 2: Check for contradictions before writing
-    const contradictions = await detectContradictions(env, entity_name, obs);
+    // Phase 2: Check for contradictions before writing. With AUTO_SUPERSEDE=off
+    // nothing below uses them, so skip the search.
+    const contradictions = autoSupersede.off
+      ? []
+      : await detectContradictions(env, entity_name, obs, Math.min(CONTRADICTION_SIMILARITY_THRESHOLD, autoSupersede.threshold));
 
     const result = await env.DB.prepare(
       `INSERT INTO observations (entity_id, content, salience, emotion, weight, certainty, source, context, valid_from) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`
@@ -210,48 +215,16 @@ async function writeObservation(env: Env, params: Record<string, unknown>): Prom
       console.log(`Failed to vectorize observation ${obsId}: ${e}`);
     }
 
-    // Auto-supersede highly similar observations.
-    // No transactions exist (adapter opens a fresh client per statement), so the
-    // pair is ordered: retire the old row first (the load-bearing half), then set
-    // the back-pointer — and any desync is logged for reconciliation, never swallowed.
+    // Similar observations on the same entity. Short facts (both sides at most
+    // AUTO_SUPERSEDE_MAX_CHARS) are retired automatically; a long pair is never
+    // retired silently — it becomes a proposal the owner accepts in ritual_tend.
     for (const old of contradictions) {
-      if (old.similarity >= AUTO_SUPERSEDE_THRESHOLD) {
-        let oldApplied = false;
-        try {
-          const oldRes = await env.DB.prepare(`
-            UPDATE observations SET valid_until = NOW(), superseded_by = ? WHERE id = ? AND valid_until IS NULL
-          `).bind(newRowId, old.id).run();
-          // Never trust .success (hardcoded true) — trust .meta.changes.
-          oldApplied = (oldRes.meta.changes ?? 0) > 0;
-          if (oldApplied) {
-            const newRes = await env.DB.prepare(`
-              UPDATE observations SET supersedes = ? WHERE id = ?
-            `).bind(old.id, newRowId).run();
-            totalSuperseded++;
-            if ((newRes.meta.changes ?? 0) === 0) {
-              console.error(`[mind_write] supersede pair desync: obs ${old.id} got superseded_by=${newRowId}, but supersedes back-pointer on obs ${newRowId} applied 0 changes — reconcile: UPDATE observations SET supersedes=${old.id} WHERE id=${newRowId}`);
-            }
-          }
-          // oldApplied=false means the old row was already retired (valid_until set)
-          // by a concurrent path — nothing to supersede, skip the back-pointer.
-        } catch (e) {
-          const code = (e as { code?: string })?.code;
-          if (code === "42703") {
-            // Genuinely-missing supersede columns on this deployment — tolerate, log once.
-            if (!supersedeColumnsMissingLogged) {
-              supersedeColumnsMissingLogged = true;
-              console.warn(`[mind_write] supersede columns missing (Postgres 42703) — auto-supersede inert on this deployment: ${e}`);
-            }
-            if (oldApplied) {
-              console.error(`[mind_write] supersede pair desync: obs ${old.id} got superseded_by=${newRowId}, but supersedes column missing for obs ${newRowId} — reconcile ids (old=${old.id}, new=${newRowId})`);
-            }
-          } else if (oldApplied) {
-            console.error(`[mind_write] supersede pair desync: obs ${old.id} got superseded_by=${newRowId}, but back-pointer update failed (${e}) — reconcile ids (old=${old.id}, new=${newRowId})`);
-            totalSuperseded++;
-          } else {
-            console.error(`[mind_write] supersede update failed for obs ${old.id} -> ${newRowId}: ${e}`);
-          }
-        }
+      if (old.similarity < autoSupersede.threshold) continue;
+      const bothShort = obs.length <= AUTO_SUPERSEDE_MAX_CHARS && old.content.length <= AUTO_SUPERSEDE_MAX_CHARS;
+      if (bothShort) {
+        if (await retireObservation(env, old.id, newRowId)) totalSuperseded++;
+      } else if (await proposeSupersede(env, entity!.id as number, old.id, newRowId, old.similarity, old.content.length, obs.length)) {
+        totalProposed++;
       }
     }
   }
@@ -268,7 +241,41 @@ async function writeObservation(env: Env, params: Record<string, unknown>): Prom
   if (totalSuperseded > 0) {
     msg += `. Superseded ${totalSuperseded} older observation${totalSuperseded > 1 ? 's' : ''}.`;
   }
+  if (totalProposed > 0) {
+    msg += `${totalSuperseded > 0 ? ' ' : '. '}${totalProposed} older long observation${totalProposed > 1 ? 's' : ''} may be replaced by this one. Left in place; see ritual_tend to decide.`;
+  }
   return msg;
+}
+
+// A long pair is never retired silently: record it as a daemon proposal
+// (type "supersede": from = the old observation, to = the new one) that
+// ritual_tend can accept (retire the old one) or reject (do nothing).
+async function proposeSupersede(
+  env: Env, entityId: number, oldId: number, newId: number,
+  similarity: number, oldLength: number, newLength: number
+): Promise<boolean> {
+  const reason = `Possible supersede (${Math.round(similarity * 100)}% similar): #${newId} (${newLength} chars) may replace #${oldId} (${oldLength} chars). Both are long, so #${oldId} was left in place.`;
+  try {
+    // Same backpressure as the daemon's generators: a queue at the cap gets no
+    // more. Nothing is lost: the long pair simply stays as it is, unretired.
+    const pendingRow = await env.DB.prepare(
+      `SELECT COUNT(*) as count FROM daemon_proposals WHERE status = 'pending'`
+    ).first().catch(() => null);
+    const pending = Number(pendingRow?.count ?? 0);
+    if (pending >= PROPOSAL_PENDING_CAP) {
+      console.log(`[mind_write] supersede proposal for obs ${oldId} -> ${newId} not recorded — ${pending} pending >= cap ${PROPOSAL_PENDING_CAP}; both observations left in place`);
+      return false;
+    }
+    await env.DB.prepare(`
+      INSERT INTO daemon_proposals
+      (proposal_type, from_obs_id, to_obs_id, from_entity_id, to_entity_id, reason, confidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind("supersede", oldId, newId, entityId, entityId, reason, similarity).run();
+    return true;
+  } catch (e) {
+    console.error(`[mind_write] could not record supersede proposal for obs ${oldId} -> ${newId} (similarity ${similarity.toFixed(3)}): ${e}`);
+    return false;
+  }
 }
 
 async function writeRelation(env: Env, params: Record<string, unknown>): Promise<string> {
